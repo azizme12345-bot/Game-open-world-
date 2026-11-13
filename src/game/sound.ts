@@ -2,6 +2,9 @@
 class CityAudioEngine {
   private ctx: AudioContext | null = null;
   private noiseBuffer: AudioBuffer | null = null;
+  private unlocked = false;
+  private unlockListenersAttached = false;
+  private cleanupTimers = new Set<ReturnType<typeof setTimeout>>();
 
   private hornOscA: OscillatorNode | null = null;
   private hornOscB: OscillatorNode | null = null;
@@ -21,7 +24,27 @@ class CityAudioEngine {
 
   private lastScreechTime = 0;
 
-  private ensureContext(): AudioContext | null {
+  private handleGestureUnlock = (): void => {
+    this.unlock();
+  };
+
+  private attachUnlockListeners(): void {
+    if (this.unlocked || this.unlockListenersAttached || typeof window === 'undefined') return;
+    this.unlockListenersAttached = true;
+    window.addEventListener('pointerdown', this.handleGestureUnlock, { capture: true, passive: true });
+    window.addEventListener('touchstart', this.handleGestureUnlock, { capture: true, passive: true });
+    window.addEventListener('keydown', this.handleGestureUnlock, { capture: true, passive: true });
+  }
+
+  private detachUnlockListeners(): void {
+    if (!this.unlockListenersAttached || typeof window === 'undefined') return;
+    this.unlockListenersAttached = false;
+    window.removeEventListener('pointerdown', this.handleGestureUnlock, { capture: true });
+    window.removeEventListener('touchstart', this.handleGestureUnlock, { capture: true });
+    window.removeEventListener('keydown', this.handleGestureUnlock, { capture: true });
+  }
+
+  public unlock(): AudioContext | null {
     if (typeof window === 'undefined') return null;
     if (!this.ctx) {
       const AudioCtx =
@@ -34,10 +57,33 @@ class CityAudioEngine {
         return null;
       }
     }
+    this.unlocked = true;
+    this.detachUnlockListeners();
     if (this.ctx.state === 'suspended') {
       this.ctx.resume().catch(() => {});
     }
     return this.ctx;
+  }
+
+  private getReadyContext(allowGestureCreate = false): AudioContext | null {
+    this.attachUnlockListeners();
+    if (allowGestureCreate) {
+      const ctx = this.unlock();
+      if (!ctx || ctx.state === 'closed') return null;
+      return ctx;
+    }
+    if (!this.unlocked || !this.ctx || this.ctx.state !== 'running') {
+      return null;
+    }
+    return this.ctx;
+  }
+
+  private scheduleCleanup(fn: () => void, delayMs: number): void {
+    const id = setTimeout(() => {
+      this.cleanupTimers.delete(id);
+      fn();
+    }, delayMs);
+    this.cleanupTimers.add(id);
   }
 
   private getNoiseBuffer(ctx: AudioContext): AudioBuffer {
@@ -55,7 +101,7 @@ class CityAudioEngine {
   }
 
   public setHorn(active: boolean): void {
-    const ctx = active ? this.ensureContext() : this.ctx;
+    const ctx = active ? this.getReadyContext(true) : this.ctx;
     if (!ctx) return;
 
     if (active && !this.hornGain) {
@@ -104,7 +150,7 @@ class CityAudioEngine {
         const now = ctx.currentTime;
         gain.gain.setValueAtTime(Math.max(gain.gain.value, 0.001), now);
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
-        setTimeout(() => {
+        this.scheduleCleanup(() => {
           try {
             oscA?.stop();
             oscB?.stop();
@@ -124,7 +170,7 @@ class CityAudioEngine {
 
   public setEngine(active: boolean, load: number): void {
     const clampedLoad = Math.max(0, Math.min(1, load));
-    const ctx = active ? this.ensureContext() : this.ctx;
+    const ctx = active ? this.getReadyContext(false) : this.ctx;
     if (!ctx) return;
 
     const baseFreq = 46 + clampedLoad * 120;
@@ -186,7 +232,7 @@ class CityAudioEngine {
         const now = ctx.currentTime;
         gain.gain.setValueAtTime(Math.max(gain.gain.value, 0.001), now);
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
-        setTimeout(() => {
+        this.scheduleCleanup(() => {
           try {
             oscA?.stop();
             oscB?.stop();
@@ -205,7 +251,7 @@ class CityAudioEngine {
   }
 
   public setSiren(active: boolean): void {
-    const ctx = active ? this.ensureContext() : this.ctx;
+    const ctx = active ? this.getReadyContext(false) : this.ctx;
     if (!ctx) return;
 
     if (active && !this.sirenGain) {
@@ -262,7 +308,7 @@ class CityAudioEngine {
         const now = ctx.currentTime;
         gain.gain.setValueAtTime(Math.max(gain.gain.value, 0.001), now);
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
-        setTimeout(() => {
+        this.scheduleCleanup(() => {
           try {
             osc?.stop();
             lfo?.stop();
@@ -284,7 +330,7 @@ class CityAudioEngine {
   public playCrash(strength: number): void {
     const s = Math.max(0, Math.min(1, strength));
     if (s <= 0.01) return;
-    const ctx = this.ensureContext();
+    const ctx = this.getReadyContext(false);
     if (!ctx) return;
 
     try {
@@ -315,7 +361,7 @@ class CityAudioEngine {
     const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
     if (nowMs - this.lastScreechTime < 500) return;
 
-    const ctx = this.ensureContext();
+    const ctx = this.getReadyContext(false);
     if (!ctx) return;
     this.lastScreechTime = nowMs;
 
@@ -345,7 +391,7 @@ class CityAudioEngine {
   }
 
   public playViolationChime(): void {
-    const ctx = this.ensureContext();
+    const ctx = this.getReadyContext(false);
     if (!ctx) return;
     try {
       const now = ctx.currentTime;
@@ -366,6 +412,14 @@ class CityAudioEngine {
   }
 
   public dispose(): void {
+    this.detachUnlockListeners();
+    this.unlocked = false;
+
+    for (const id of this.cleanupTimers) {
+      clearTimeout(id);
+    }
+    this.cleanupTimers.clear();
+
     const stopImmediate = (
       nodes: { stop?: () => void; disconnect: () => void }[]
     ) => {

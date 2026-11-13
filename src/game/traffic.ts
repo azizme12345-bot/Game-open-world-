@@ -17,7 +17,11 @@ export type TrafficVehicleType =
   | 'truck'
   | 'tractor'
   | 'pickup'
-  | 'emergency';
+  | 'emergency'
+  | 'vip'
+  | 'tank'
+  | 'airplane'
+  | 'helicopter';
 
 export interface EnterableVehicleCandidate {
   id: string;
@@ -162,6 +166,14 @@ function labelForTrafficType(type: TrafficVehicleType): string {
       return 'Countryside Pickup';
     case 'emergency':
       return 'Patrol Unit';
+    case 'vip':
+      return 'VIP Luxury Sedan';
+    case 'tank':
+      return 'Military Tank';
+    case 'airplane':
+      return 'Propeller Airplane';
+    case 'helicopter':
+      return 'City Helicopter';
     default:
       return 'City Sedan';
   }
@@ -239,20 +251,26 @@ export function createTrafficSystem(): TrafficSystemHandle {
     { type: 'pickup', from: 'C_SOUTH_W2', to: 'C_SOUTH_SUN', t: 0.5, speed: 12.5 },
     { type: 'car', from: 'C_MILLSTONE', to: 'W2_NW_CORNER', t: 0.45, speed: 12.4 },
     { type: 'tractor', from: 'C_GREENVALE', to: 'C_SOUTH_SUN', t: 0.35, speed: 6.8 },
+    { type: 'vip', from: 'CENTER_4WAY', to: 'ME_4WAY', t: 0.3, speed: 13.5 },
+    { type: 'tank', from: 'NW_4WAY', to: 'C_GREENVALE', t: 0.2, speed: 8.0 },
+    { type: 'airplane', from: 'E_HWY_N', to: 'AIRPORT_TERM', t: 0.5, speed: 20.0 },
+    { type: 'helicopter', from: 'ROUNDABOUT', to: 'CENTER_4WAY', t: 0.4, speed: 18.0 },
   ];
 
   const getHalfLen = (t: TrafficVehicleType) =>
     t === 'bus'
       ? 4.3
-      : t === 'truck'
+      : t === 'truck' || t === 'tank'
         ? 3.8
-        : t === 'pickup'
-          ? 2.65
-          : t === 'tractor'
-            ? 2.1
-            : t === 'motorcycle'
-              ? 1.1
-              : 2.2;
+        : t === 'airplane' || t === 'helicopter'
+          ? 3.5
+          : t === 'pickup' || t === 'vip'
+            ? 2.65
+            : t === 'tractor'
+              ? 2.1
+              : t === 'motorcycle'
+                ? 1.1
+                : 2.2;
 
   const agents: TrafficAgent[] = spawnSpecs.map((sp, idx) => {
     const fromNode = NODE_MAP.get(sp.from)!;

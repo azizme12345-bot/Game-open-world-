@@ -11,7 +11,7 @@ import {
   type RoadNode,
 } from './roadNetwork';
 import { cityAudio } from './sound';
-import type { ArrestTicket, PoliceHudState, ViolationItem } from './types';
+import type { ArrestTicket, PoliceHudState } from './types';
 import { createVehicleBuilder } from './vehicleFactory';
 
 export interface PoliceSystemHandle {
@@ -22,9 +22,9 @@ export interface PoliceSystemHandle {
     playerX: number,
     playerZ: number,
     playerSpeed: number,
-    playerHeading: number,
-    collidedWithTraffic: boolean,
-    isPlayerOnFoot: boolean
+    isPlayerOnFoot: boolean,
+    hitPolice: boolean,
+    hitPedestrian: boolean
   ) => { forceStopPlayer: boolean; hudState: PoliceHudState };
   resolvePlayerCollision: (
     px: number,
@@ -120,14 +120,6 @@ function dampAngle(current: number, target: number, lambda: number, dt: number):
   return current + diff * (1 - Math.exp(-lambda * dt));
 }
 
-function isRedSignalForAxis(axis: 'NS' | 'EW', elapsedTime: number): boolean {
-  const cycle = elapsedTime % 12;
-  if (axis === 'NS') {
-    return cycle >= 6.15 && cycle < 11.85;
-  }
-  return cycle >= 0.15 && cycle < 5.85;
-}
-
 export function createPoliceSystem(): PoliceSystemHandle {
   const group = new THREE.Group();
   group.name = 'CityPoliceUnits';
@@ -220,34 +212,29 @@ export function createPoliceSystem(): PoliceSystemHandle {
     };
   });
 
-  // Law, Pending Violations (NO IMMEDIATE FINE!), & Arrest State
+  // Law, Pending Major Crimes, & Arrest State
   let wantedLevel = 0;
-  let totalFines = 0;
   let status: PoliceHudState['status'] = 'patrol';
   let escapeTimer = 0;
   let escapedBannerTimer = 0;
 
-  let pendingViolations: ViolationItem[] = [];
+  let pendingViolations: string[] = [];
   const registeredViolationKeys = new Set<string>();
   let activeTicket: ArrestTicket | null = null;
   let ticketCounter = 0;
 
-  let speedingStreak = 0;
-  let speedingCooldown = 0;
-  let collisionCooldown = 0;
+  let policeHitCooldown = 0;
+  let pedestrianHitCooldown = 0;
   let theftCooldown = 0;
-  const intersectionCooldowns = new Map<string, number>();
 
   const ESCAPE_DURATION = 9.0;
 
-  // CRITICAL FINE RULE: Registering a violation NEVER adds to totalFines or shows a fine ticket!
-  // It records the infraction internally and dispatches police pursuit.
-  const registerPendingViolation = (dedupKey: string, reason: string, fine: number) => {
+  const registerPendingViolation = (dedupKey: string, reason: string) => {
     if (status === 'arrested') return;
     if (registeredViolationKeys.has(dedupKey)) return;
 
     registeredViolationKeys.add(dedupKey);
-    pendingViolations.push({ reason, fine });
+    pendingViolations.push(reason);
     wantedLevel = Math.min(3, Math.max(1, pendingViolations.length));
     escapeTimer = 0;
     if (status !== 'officer_approach') {
@@ -276,19 +263,12 @@ export function createPoliceSystem(): PoliceSystemHandle {
 
   const completePhysicalArrest = (arrestingUnit: PoliceUnit) => {
     if (status === 'arrested') return;
-    // Deduplicate pending violation reasons into ticket line items; ONLY issue fine ONCE here!
-    const items =
-      pendingViolations.length > 0
-        ? [...pendingViolations]
-        : [{ reason: 'Evading Police', fine: 200 }];
-    const ticketSum = items.reduce((acc, v) => acc + v.fine, 0);
+    const items = pendingViolations.length > 0 ? [...pendingViolations] : ['Evading Police'];
 
-    totalFines += ticketSum;
     ticketCounter += 1;
     activeTicket = {
       id: ticketCounter,
       violations: items,
-      totalTicketFine: ticketSum,
     };
 
     pendingViolations = [];
@@ -301,9 +281,8 @@ export function createPoliceSystem(): PoliceSystemHandle {
 
   const getHudState = (): PoliceHudState => ({
     wantedLevel,
-    totalFines,
     status,
-    pendingReasons: pendingViolations.map((v) => v.reason),
+    pendingReasons: [...pendingViolations],
     activeTicket,
   });
 
@@ -315,9 +294,8 @@ export function createPoliceSystem(): PoliceSystemHandle {
     wantedLevel = 0;
     escapeTimer = 0;
     status = 'patrol';
-    speedingStreak = 0;
-    speedingCooldown = 4.0;
-    collisionCooldown = 4.0;
+    policeHitCooldown = 4.0;
+    pedestrianHitCooldown = 4.0;
     theftCooldown = 3.0;
 
     // Return officers back inside their cruisers & send cruisers back onto patrol
@@ -338,7 +316,7 @@ export function createPoliceSystem(): PoliceSystemHandle {
     registerTheftViolation: () => {
       if (theftCooldown > 0 || status === 'arrested') return;
       theftCooldown = 6.0;
-      registerPendingViolation(`theft_${Math.floor(performance.now() / 6000)}`, 'Vehicle Theft', 400);
+      registerPendingViolation(`theft_${Math.floor(performance.now() / 6000)}`, 'Vehicle Theft');
     },
     update: (
       elapsedTime: number,
@@ -346,14 +324,14 @@ export function createPoliceSystem(): PoliceSystemHandle {
       playerX: number,
       playerZ: number,
       playerSpeed: number,
-      playerHeading: number,
-      collidedWithTraffic: boolean,
-      isPlayerOnFoot: boolean
+      isPlayerOnFoot: boolean,
+      hitPolice: boolean,
+      hitPedestrian: boolean
     ) => {
       let forceStopPlayer = false;
 
-      if (speedingCooldown > 0) speedingCooldown -= dt;
-      if (collisionCooldown > 0) collisionCooldown -= dt;
+      if (policeHitCooldown > 0) policeHitCooldown -= dt;
+      if (pedestrianHitCooldown > 0) pedestrianHitCooldown -= dt;
       if (theftCooldown > 0) theftCooldown -= dt;
 
       if (status === 'escaped') {
@@ -363,60 +341,15 @@ export function createPoliceSystem(): PoliceSystemHandle {
         }
       }
 
-      // 1) Detect Traffic Violations when driving & not already arrested
+      // 1) Detect Major Crimes Only (Hitting a Police Car, Hitting a Pedestrian > 15 km/h; Vehicle Theft is via registerTheftViolation)
       if (status !== 'arrested' && !isPlayerOnFoot) {
-        // A. Red Light Running Detection (only once per signal cycle at same intersection)
-        if (Math.abs(playerSpeed) > 6.5) {
-          const travelAxis: 'NS' | 'EW' =
-            Math.abs(Math.cos(playerHeading)) > Math.abs(Math.sin(playerHeading)) ? 'NS' : 'EW';
-
-          if (isRedSignalForAxis(travelAxis, elapsedTime)) {
-            for (const node of ROAD_NODES) {
-              if (node.isRural || (node.kind !== 'intersection' && node.kind !== 'tjunction')) continue;
-              const dx = Math.abs(playerX - node.x);
-              const dz = Math.abs(playerZ - node.z);
-              if (dx < 7.2 && dz < 7.2) {
-                const lastT = intersectionCooldowns.get(node.id) ?? -99;
-                if (elapsedTime - lastT > 10.0) {
-                  intersectionCooldowns.set(node.id, elapsedTime);
-                  const cycleBucket = Math.floor(elapsedTime / 12);
-                  registerPendingViolation(
-                    `red_${node.id}_${cycleBucket}`,
-                    'Ran Red Light',
-                    250
-                  );
-                }
-                break;
-              }
-            }
-          }
+        if (hitPolice && policeHitCooldown <= 0) {
+          policeHitCooldown = 6.0;
+          registerPendingViolation(`police_hit_${Math.floor(elapsedTime / 6)}`, 'Hit Police Car');
         }
-
-        // B. Speeding Detection (> 68 km/h on city streets, airport runway exempt)
-        const onAirportRunway = playerX > 245 && playerZ < -130;
-        if (!onAirportRunway && Math.abs(playerSpeed) > 19.0) {
-          speedingStreak += dt;
-          if (speedingStreak > 1.8 && speedingCooldown <= 0) {
-            speedingStreak = 0;
-            speedingCooldown = 12.0;
-            registerPendingViolation(
-              `speed_${Math.floor(elapsedTime / 12)}`,
-              'Speeding (> 68 km/h)',
-              180
-            );
-          }
-        } else {
-          speedingStreak = Math.max(0, speedingStreak - dt * 2.0);
-        }
-
-        // C. Reckless Collision Detection
-        if (collidedWithTraffic && Math.abs(playerSpeed) > 8.5 && collisionCooldown <= 0) {
-          collisionCooldown = 8.0;
-          registerPendingViolation(
-            `collision_${Math.floor(elapsedTime / 8)}`,
-            'Reckless Driving',
-            300
-          );
+        if (hitPedestrian && Math.abs(playerSpeed) * 3.6 > 15 && pedestrianHitCooldown <= 0) {
+          pedestrianHitCooldown = 6.0;
+          registerPendingViolation(`ped_hit_${Math.floor(elapsedTime / 6)}`, 'Hit Pedestrian');
         }
       }
 

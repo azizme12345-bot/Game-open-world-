@@ -7,7 +7,11 @@ export type DetailedVehicleModelType =
   | 'motorcycle'
   | 'tractor'
   | 'pickup'
-  | 'emergency';
+  | 'emergency'
+  | 'vip'
+  | 'tank'
+  | 'airplane'
+  | 'helicopter';
 
 export interface BuiltVehicleModel {
   mesh: THREE.Group;
@@ -656,6 +660,117 @@ export function createVehicleBuilder(palette: VehicleFactoryPalette) {
       addWheel(1.08, 0.42, 1.15, 0.42, 0.3);
       addWheel(-1.08, 0.42, 2.55, 0.42, 0.3);
       addWheel(1.08, 0.42, 2.55, 0.42, 0.3);
+    } else if (type === 'vip') {
+      const vipMat = trackMat(new THREE.MeshPhysicalMaterial({ color: 0x0f172a, metalness: 0.85, roughness: 0.15, clearcoat: 1.0 }));
+      const goldTrimMat = trackMat(new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.9, roughness: 0.2 }));
+
+      const chassis = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.02, 0.72, 5.2)), vipMat);
+      chassis.position.set(0, 0.45, 0);
+      chassis.castShadow = true;
+      sprungBody.add(chassis);
+
+      const cabin = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.82, 0.75, 3.1)), glassMat);
+      cabin.position.set(0, 1.02, -0.15);
+      sprungBody.add(cabin);
+
+      const stripe = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.05, 0.08, 5.22)), goldTrimMat);
+      stripe.position.set(0, 0.65, 0);
+      sprungBody.add(stripe);
+
+      addInteriorSeats(0.65, -1.1, 0.8);
+      addHeadAndTailLights(0.72, 0.48, -2.62, 0.74, 2.62);
+
+      addWheel(-0.92, 0.38, -1.65, 0.38, 0.26, goldTrimMat);
+      addWheel(0.92, 0.38, -1.65, 0.38, 0.26, goldTrimMat);
+      addWheel(-0.92, 0.38, 1.65, 0.38, 0.26, goldTrimMat);
+      addWheel(0.92, 0.38, 1.65, 0.38, 0.26, goldTrimMat);
+    } else if (type === 'tank') {
+      const tankMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x3b4d32, roughness: 0.7, metalness: 0.3 }));
+      const treadMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x1a1c18, roughness: 0.9 }));
+
+      const hull = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.4, 0.85, 3.8)), tankMat);
+      hull.position.set(0, 0.65, 0);
+      hull.castShadow = true;
+      sprungBody.add(hull);
+
+      [-1.25, 1.25].forEach((tx) => {
+        const tread = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.38, 0.72, 4.0)), treadMat);
+        tread.position.set(tx, 0.42, 0);
+        sprungBody.add(tread);
+      });
+
+      const turret = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.6, 0.65, 1.8)), tankMat);
+      turret.position.set(0, 1.35, 0.1);
+      turret.castShadow = true;
+      sprungBody.add(turret);
+
+      const cannon = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.12, 0.14, 2.8, 12)), darkMetalMat);
+      cannon.rotation.x = Math.PI / 2;
+      cannon.position.set(0, 1.5, -1.5);
+      sprungBody.add(cannon);
+
+      addWheel(-1.25, 0.38, -1.4, 0.38, 0.38);
+      addWheel(1.25, 0.38, -1.4, 0.38, 0.38);
+      addWheel(-1.25, 0.38, 1.4, 0.38, 0.38);
+      addWheel(1.25, 0.38, 1.4, 0.38, 0.38);
+    } else if (type === 'airplane') {
+      const airMat = trackMat(new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.3, metalness: 0.5 }));
+      const wingMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.4, metalness: 0.3 }));
+
+      const fuselage = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.65, 0.55, 5.2, 12)), airMat);
+      fuselage.rotation.x = Math.PI / 2;
+      fuselage.position.set(0, 1.2, 0);
+      fuselage.castShadow = true;
+      sprungBody.add(fuselage);
+
+      const wings = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(7.2, 0.12, 1.4)), wingMat);
+      wings.position.set(0, 1.35, 0.2);
+      sprungBody.add(wings);
+
+      const tailWing = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.2, 0.1, 0.8)), wingMat);
+      tailWing.position.set(0, 1.5, 2.1);
+      sprungBody.add(tailWing);
+
+      const tailFin = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.1, 0.9, 0.8)), wingMat);
+      tailFin.position.set(0, 1.95, 2.1);
+      sprungBody.add(tailFin);
+
+      const prop = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.6, 0.14, 0.08)), darkMetalMat);
+      prop.position.set(0, 1.2, -2.68);
+      sprungBody.add(prop);
+
+      addWheel(-1.4, 0.35, 0.4, 0.35, 0.22);
+      addWheel(1.4, 0.35, 0.4, 0.35, 0.22);
+      addWheel(0, 0.35, -1.8, 0.35, 0.22);
+    } else if (type === 'helicopter') {
+      const heliMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.35, metalness: 0.4 }));
+
+      const pod = new THREE.Mesh(trackGeo(new THREE.CapsuleGeometry(0.75, 2.8, 8, 12)), heliMat);
+      pod.rotation.x = Math.PI / 2;
+      pod.position.set(0, 1.3, 0);
+      pod.castShadow = true;
+      sprungBody.add(pod);
+
+      const tailBoom = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.18, 0.24, 3.2, 8)), heliMat);
+      tailBoom.rotation.x = Math.PI / 2;
+      tailBoom.position.set(0, 1.4, 2.2);
+      sprungBody.add(tailBoom);
+
+      const mainRotor = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(8.5, 0.06, 0.35)), darkMetalMat);
+      mainRotor.position.set(0, 2.35, 0);
+      sprungBody.add(mainRotor);
+
+      const tailRotor = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.05, 1.1, 0.2)), darkMetalMat);
+      tailRotor.position.set(0.32, 1.6, 3.7);
+      sprungBody.add(tailRotor);
+
+      [-0.9, 0.9].forEach((skx) => {
+        const skid = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.12, 0.14, 3.2)), darkMetalMat);
+        skid.position.set(skx, 0.32, 0);
+        sprungBody.add(skid);
+      });
+
+      addWheel(0, 0.35, 0, 0.35, 0.2);
     } else {
       // Sport Motorcycle + Detailed Human Rider
       const fairing = new THREE.Mesh(trackGeo(new THREE.CapsuleGeometry(0.22, 0.95, 6, 10)), motoPaintMat);

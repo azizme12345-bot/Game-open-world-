@@ -160,6 +160,38 @@ const VEHICLE_HANDLING: Record<VehicleKind, VehicleHandlingSpec> = {
     turnRate: 2.05,
     cameraDistance: 8.4,
   },
+  vip: {
+    maxFwdSpeed: 26.0,
+    maxRevSpeed: -9.0,
+    accelRate: 13.0,
+    brakeRate: 25.0,
+    turnRate: 2.1,
+    cameraDistance: 8.5,
+  },
+  tank: {
+    maxFwdSpeed: 14.0,
+    maxRevSpeed: -5.0,
+    accelRate: 6.0,
+    brakeRate: 22.0,
+    turnRate: 1.2,
+    cameraDistance: 11.0,
+  },
+  airplane: {
+    maxFwdSpeed: 45.0,
+    maxRevSpeed: -10.0,
+    accelRate: 18.0,
+    brakeRate: 30.0,
+    turnRate: 2.5,
+    cameraDistance: 12.0,
+  },
+  helicopter: {
+    maxFwdSpeed: 32.0,
+    maxRevSpeed: -10.0,
+    accelRate: 12.0,
+    brakeRate: 20.0,
+    turnRate: 2.8,
+    cameraDistance: 10.0,
+  },
 };
 
 const PLAYER_BLUE_SPORTS_ID = 'player_blue_sports';
@@ -225,7 +257,8 @@ export class CityDriveEngine {
   private navTurn: NavigationTurnInfo | null = null;
   private lastRouteRefreshTime = -10;
   private lastTelemetryTime = -10;
-  private collidedThisStep = false;
+  private hitPoliceThisStep = false;
+  private hitPedestrianThisStep = false;
 
   private frameId = 0;
   private disposed = false;
@@ -680,7 +713,8 @@ export class CityDriveEngine {
     const { accelerate, reverse, steerLeft, steerRight, handbrake, gyroSteer, steerAnalog } =
       this.drivingInput;
     let isBraking = false;
-    this.collidedThisStep = false;
+    this.hitPoliceThisStep = false;
+    this.hitPedestrianThisStep = false;
 
     if (handbrake) {
       if (Math.abs(this.carSpeed) <= HANDBRAKE_RATE * dt) {
@@ -789,8 +823,9 @@ export class CityDriveEngine {
       roadResolved.speed,
       this.activeVehicleId
     );
+    let collidedThisStep = false;
     if (trafficResolved.speed < roadResolved.speed * 0.85) {
-      this.collidedThisStep = true;
+      collidedThisStep = true;
     }
 
     // Collide with parked Blue Sports Car if currently driving another vehicle
@@ -806,20 +841,27 @@ export class CityDriveEngine {
         nextX += (dx / d) * push;
         nextZ += (dz / d) * push;
         nextSpeed *= 0.72;
-        this.collidedThisStep = true;
+        collidedThisStep = true;
       }
     }
 
     const policeResolved = this.police.resolvePlayerCollision(nextX, nextZ, nextSpeed);
     if (policeResolved.hitPolice) {
-      this.collidedThisStep = true;
+      collidedThisStep = true;
+      if (speedBefore > 0.5) {
+        this.hitPoliceThisStep = true;
+      }
     }
 
     this.carX = policeResolved.x;
     this.carZ = policeResolved.z;
     this.carSpeed = policeResolved.speed;
 
-    if (this.collidedThisStep) {
+    if (speedBefore * 3.6 > 15 && this.pedestrians.checkVehicleCollision(this.carX, this.carZ, 1.8)) {
+      this.hitPedestrianThisStep = true;
+    }
+
+    if (collidedThisStep) {
       const lostSpeed = speedBefore - Math.abs(this.carSpeed);
       if (lostSpeed >= 2.5 && this.damageCooldown <= 0) {
         const strength = THREE.MathUtils.clamp((lostSpeed - 2.5) / 9, 0, 1);
@@ -883,7 +925,8 @@ export class CityDriveEngine {
   }
 
   private updateWalking(elapsed: number, dt: number): void {
-    this.collidedThisStep = false;
+    this.hitPoliceThisStep = false;
+    this.hitPedestrianThisStep = false;
 
     const { moveX, moveY, run, jumpPressed } = this.walkingInput;
     const inputMag = Math.min(1, Math.hypot(moveX, moveY));
@@ -1171,7 +1214,11 @@ export class CityDriveEngine {
   }
 
   private afterDraw(cb: () => void): void {
-    const gl = this.renderer.getContext() as WebGL2RenderingContext;
+    const gl = this.renderer.getContext() as WebGL2RenderingContext | null;
+    if (!gl) {
+      this.frameId = window.setTimeout(cb, 80);
+      return;
+    }
     const sync = gl.fenceSync ? gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0) : null;
     gl.flush();
     const poll = () => {
@@ -1222,9 +1269,9 @@ export class CityDriveEngine {
       pos.x,
       pos.z,
       this.playerMode === 'driving' ? this.carSpeed : this.walkSpeed,
-      pos.heading,
-      this.collidedThisStep,
-      isOnFoot
+      isOnFoot,
+      this.hitPoliceThisStep,
+      this.hitPedestrianThisStep
     );
 
     if (this.repairing) {
@@ -1377,12 +1424,14 @@ export class CityDriveEngine {
 
   private handleContextLost = (e: Event): void => {
     e.preventDefault();
+    if (this.disposed) return;
     cancelAnimationFrame(this.frameId);
     clearTimeout(this.frameId);
     this.callbacks.onContextLost?.(true);
   };
 
   private handleContextRestored = (): void => {
+    if (this.disposed) return;
     this.callbacks.onContextLost?.(false);
     this.tick();
   };

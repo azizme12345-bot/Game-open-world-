@@ -3,6 +3,7 @@ import * as THREE from 'three';
 export interface PedestrianSystemHandle {
   group: THREE.Group;
   update: (elapsedTime: number, dt: number) => void;
+  checkVehicleCollision: (carX: number, carZ: number, radius?: number) => boolean;
   dispose: () => void;
 }
 
@@ -460,6 +461,18 @@ export function createPedestrianSystem(): PedestrianSystemHandle {
       }
 
       updateTransforms(elapsedTime);
+    },
+    checkVehicleCollision: (carX: number, carZ: number, radius = 1.8) => {
+      const rSq = radius * radius;
+      for (let i = 0; i < count; i++) {
+        const a = agents[i];
+        const dx = a.x - carX;
+        const dz = a.z - carZ;
+        if (dx * dx + dz * dz < rSq) {
+          return true;
+        }
+      }
+      return false;
     },
     dispose: () => {
       headGeo.dispose();

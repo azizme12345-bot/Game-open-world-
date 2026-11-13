@@ -346,15 +346,47 @@ export function isInCountrysideZone(x: number, z: number): boolean {
   return x < -202 || z > 60 || z < -252;
 }
 
+export function resolveSolidObstacles(x: number, z: number, margin = 1.0): { x: number; z: number } {
+  let rx = x;
+  let rz = z;
+
+  for (let i = 0; i < CITY_BLOCKS.length; i++) {
+    const b = CITY_BLOCKS[i];
+    const minX = b.minX - margin;
+    const maxX = b.maxX + margin;
+    const minZ = b.minZ - margin;
+    const maxZ = b.maxZ + margin;
+
+    if (rx > minX && rx < maxX && rz > minZ && rz < maxZ) {
+      const dMinX = rx - minX;
+      const dMaxX = maxX - rx;
+      const dMinZ = rz - minZ;
+      const dMaxZ = maxZ - rz;
+      const minD = Math.min(dMinX, dMaxX, dMinZ, dMaxZ);
+
+      if (minD === dMinX) rx = minX;
+      else if (minD === dMaxX) rx = maxX;
+      else if (minD === dMinZ) rz = minZ;
+      else rz = maxZ;
+    }
+  }
+
+  return { x: rx, z: rz };
+}
+
 export function resolveRoadPosition(
   x: number,
   z: number,
   speed: number
 ): { x: number; z: number; speed: number } {
+  const solid = resolveSolidObstacles(x, z, 1.4);
+  const px = solid.x;
+  const pz = solid.z;
+
   // 1) Free open-world Countryside & Agricultural Field Exploration (no artificial wall!)
-  if (isInCountrysideZone(x, z)) {
-    let cx = THREE.MathUtils.clamp(x, -680, 320);
-    let cz = THREE.MathUtils.clamp(z, -420, 310);
+  if (isInCountrysideZone(px, pz)) {
+    let cx = THREE.MathUtils.clamp(px, -680, 320);
+    let cz = THREE.MathUtils.clamp(pz, -420, 310);
 
     // Keep out of Countryside Creek water unless crossing on one of the 3 Creek Bridges
     const onCreekBridgeCorridor =
@@ -371,41 +403,41 @@ export function resolveRoadPosition(
       cx = cx < RIVER_CENTER_X ? 125.5 : 162.5;
     }
 
-    return { x: cx, z: cz, speed };
+    return { x: cx, z: cz, speed: (px !== x || pz !== z) ? speed * 0.5 : speed };
   }
 
   // 2) Check both city roundabouts
   for (let rIdx = 0; rIdx < ROUNDABOUTS.length; rIdx++) {
     const rb = ROUNDABOUTS[rIdx];
-    const rdx = x - rb.x;
-    const rdz = z - rb.z;
+    const rdx = px - rb.x;
+    const rdz = pz - rb.z;
     const rDist = Math.hypot(rdx, rdz);
     if (rDist <= RB_DRIVABLE_OUTER) {
       if (rDist >= RB_DRIVABLE_INNER) {
-        return { x, z, speed };
+        return { x: px, z: pz, speed: (px !== x || pz !== z) ? speed * 0.5 : speed };
       }
       const safeDist = Math.max(rDist, 0.001);
       return {
         x: rb.x + (rdx / safeDist) * RB_DRIVABLE_INNER,
         z: rb.z + (rdz / safeDist) * RB_DRIVABLE_INNER,
-        speed: speed * 0.94,
+        speed: speed * 0.85,
       };
     }
   }
 
   // 3) Urban paved roads & airport apron
   let bestDistSq = Infinity;
-  let bestX = x;
-  let bestZ = z;
+  let bestX = px;
+  let bestZ = pz;
 
   for (let i = 0; i < DRIVABLE_RECTS.length; i++) {
     const r = DRIVABLE_RECTS[i];
-    if (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ) {
-      return { x, z, speed };
+    if (px >= r.minX && px <= r.maxX && pz >= r.minZ && pz <= r.maxZ) {
+      return { x: px, z: pz, speed: (px !== x || pz !== z) ? speed * 0.5 : speed };
     }
-    const cx = THREE.MathUtils.clamp(x, r.minX, r.maxX);
-    const cz = THREE.MathUtils.clamp(z, r.minZ, r.maxZ);
-    const dSq = (x - cx) * (x - cx) + (z - cz) * (z - cz);
+    const cx = THREE.MathUtils.clamp(px, r.minX, r.maxX);
+    const cz = THREE.MathUtils.clamp(pz, r.minZ, r.maxZ);
+    const dSq = (px - cx) * (px - cx) + (pz - cz) * (pz - cz);
     if (dSq < bestDistSq) {
       bestDistSq = dSq;
       bestX = cx;
@@ -415,13 +447,13 @@ export function resolveRoadPosition(
 
   for (let rIdx = 0; rIdx < ROUNDABOUTS.length; rIdx++) {
     const rb = ROUNDABOUTS[rIdx];
-    const rdx = x - rb.x;
-    const rdz = z - rb.z;
+    const rdx = px - rb.x;
+    const rdz = pz - rb.z;
     const rDist = Math.hypot(rdx, rdz);
     if (rDist > RB_DRIVABLE_OUTER) {
       const cx = rb.x + (rdx / rDist) * RB_DRIVABLE_OUTER;
       const cz = rb.z + (rdz / rDist) * RB_DRIVABLE_OUTER;
-      const dSq = (x - cx) * (x - cx) + (z - cz) * (z - cz);
+      const dSq = (px - cx) * (px - cx) + (pz - cz) * (pz - cz);
       if (dSq < bestDistSq) {
         bestDistSq = dSq;
         bestX = cx;
@@ -430,12 +462,17 @@ export function resolveRoadPosition(
     }
   }
 
-  return { x: bestX, z: bestZ, speed: speed * 0.94 };
+  const blockedHit = px !== x || pz !== z;
+  return { x: bestX, z: bestZ, speed: blockedHit ? speed * 0.4 : speed * 0.94 };
 }
 
 export function resolveWalkPosition(x: number, z: number): { x: number; z: number } {
   let wx = THREE.MathUtils.clamp(x, -680, 320);
   let wz = THREE.MathUtils.clamp(z, -420, 310);
+
+  const solid = resolveSolidObstacles(wx, wz, 0.75);
+  wx = solid.x;
+  wz = solid.z;
 
   // Prevent walking into East River unless on bridge/tunnel
   const onRiverCrossing =

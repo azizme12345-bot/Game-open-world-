@@ -7,7 +7,7 @@ export type WeatherMode = 'clear' | 'rain';
 export type TimeMode = 'auto' | 'day' | 'sunset' | 'night';
 
 export type PlayerMode = 'driving' | 'walking' | 'entering' | 'exiting' | 'arrested';
-export type VehicleKind = 'sports' | 'car' | 'bus' | 'truck' | 'motorcycle' | 'tractor' | 'pickup';
+export type VehicleKind = 'sports' | 'car' | 'bus' | 'truck' | 'motorcycle' | 'tractor' | 'pickup' | 'vip' | 'tank' | 'airplane' | 'helicopter';
 
 export interface DrivingInput {
   accelerate: boolean;
@@ -41,20 +41,13 @@ export interface NavigationTurnInfo {
   destinationName: string;
 }
 
-export interface ViolationItem {
-  reason: string;
-  fine: number;
-}
-
 export interface ArrestTicket {
   id: number;
-  violations: ViolationItem[];
-  totalTicketFine: number;
+  violations: string[];
 }
 
 export interface PoliceHudState {
   wantedLevel: number; // 0..3
-  totalFines: number; // Only increases upon actual arrest
   status: 'patrol' | 'pursuit' | 'officer_approach' | 'arrested' | 'escaped';
   pendingReasons: string[];
   activeTicket: ArrestTicket | null;

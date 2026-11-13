@@ -49,9 +49,9 @@ const CAMERA_OPTIONS: { id: CameraPreset; label: string }[] = [
 
 const GEAR_OPTIONS: GearMode[] = ['P', 'R', 'N', 'D'];
 const TIME_CYCLE: TimeMode[] = ['auto', 'day', 'sunset', 'night'];
-const PREFS_STORAGE_KEY = 'city_drive_control_prefs_v1';
 
 type ButtonControlKey = 'accelerate' | 'reverse' | 'steerLeft' | 'steerRight' | 'handbrake';
+type SteerControlMode = 'stick' | 'buttons' | 'wheel';
 
 const EMPTY_BUTTONS: Record<ButtonControlKey, boolean> = {
   accelerate: false,
@@ -75,7 +75,6 @@ const INITIAL_TELEMETRY: HudTelemetry = {
   nearbyVehicle: null,
   police: {
     wantedLevel: 0,
-    totalFines: 0,
     status: 'patrol',
     pendingReasons: [],
     activeTicket: null,
@@ -83,54 +82,11 @@ const INITIAL_TELEMETRY: HudTelemetry = {
   navTurn: null,
 };
 
-function loadControlPrefs(): ControlPreferences {
-  try {
-    const raw = window.localStorage.getItem(PREFS_STORAGE_KEY);
-    if (!raw) return DEFAULT_CONTROL_PREFS;
-    const parsed = JSON.parse(raw) as Partial<ControlPreferences>;
-    const legacyScale =
-      typeof parsed.buttonScale === 'number'
-        ? Math.max(0.75, Math.min(1.45, parsed.buttonScale))
-        : DEFAULT_CONTROL_PREFS.buttonScale;
-    return {
-      handedness: parsed.handedness === 'left' ? 'left' : 'right',
-      buttonScale: legacyScale,
-      joystickScale:
-        typeof parsed.joystickScale === 'number'
-          ? Math.max(0.75, Math.min(1.45, parsed.joystickScale))
-          : legacyScale,
-      pedalsScale:
-        typeof parsed.pedalsScale === 'number'
-          ? Math.max(0.75, Math.min(1.45, parsed.pedalsScale))
-          : legacyScale,
-      actionScale:
-        typeof parsed.actionScale === 'number'
-          ? Math.max(0.75, Math.min(1.45, parsed.actionScale))
-          : legacyScale,
-      buttonOpacity:
-        typeof parsed.buttonOpacity === 'number'
-          ? Math.max(0.55, Math.min(1.0, parsed.buttonOpacity))
-          : DEFAULT_CONTROL_PREFS.buttonOpacity,
-      joystickSensitivity:
-        typeof parsed.joystickSensitivity === 'number'
-          ? Math.max(0.6, Math.min(1.8, parsed.joystickSensitivity))
-          : DEFAULT_CONTROL_PREFS.joystickSensitivity,
-      cameraSensitivity:
-        typeof parsed.cameraSensitivity === 'number'
-          ? Math.max(0.5, Math.min(2.0, parsed.cameraSensitivity))
-          : DEFAULT_CONTROL_PREFS.cameraSensitivity,
-      offsets: {
-        leftPadX: parsed.offsets?.leftPadX ?? 0,
-        leftPadY: parsed.offsets?.leftPadY ?? 0,
-        rightPadX: parsed.offsets?.rightPadX ?? 0,
-        rightPadY: parsed.offsets?.rightPadY ?? 0,
-        actionPadX: parsed.offsets?.actionPadX ?? 0,
-        actionPadY: parsed.offsets?.actionPadY ?? 0,
-      },
-    };
-  } catch {
-    return DEFAULT_CONTROL_PREFS;
-  }
+function createDefaultControlPrefs(): ControlPreferences {
+  return {
+    ...DEFAULT_CONTROL_PREFS,
+    offsets: { ...DEFAULT_CONTROL_PREFS.offsets },
+  };
 }
 
 function readRawTiltAngle(e: DeviceOrientationEvent): number {
@@ -172,7 +128,12 @@ export default function App() {
   const driveJoyPointerIdRef = useRef<number | null>(null);
   const driveJoyBaseRef = useRef<HTMLDivElement | null>(null);
   const [driveJoyKnob, setDriveJoyKnob] = useState({ x: 0, active: false });
-  const [steerStickMode, setSteerStickMode] = useState(true);
+  const wheelPointerIdRef = useRef<number | null>(null);
+  const wheelBaseRef = useRef<HTMLDivElement | null>(null);
+  const wheelPrevAngleRef = useRef<number | null>(null);
+  const wheelAngleDegRef = useRef(0);
+  const [wheelState, setWheelState] = useState({ angleDeg: 0, active: false });
+  const [steerMode, setSteerMode] = useState<SteerControlMode>('stick');
 
   const lookPointerIdRef = useRef<number | null>(null);
   const lookPrevRef = useRef<{ x: number; y: number } | null>(null);
@@ -185,7 +146,7 @@ export default function App() {
   runToggleRef.current = runToggle;
   jumpHeldRef.current = jumpHeld;
 
-  const [controlPrefs, setControlPrefs] = useState<ControlPreferences>(loadControlPrefs);
+  const [controlPrefs, setControlPrefs] = useState<ControlPreferences>(createDefaultControlPrefs);
   const controlPrefsRef = useRef(controlPrefs);
   controlPrefsRef.current = controlPrefs;
   const [customizerOpen, setCustomizerOpen] = useState(false);
@@ -276,10 +237,14 @@ export default function App() {
     joyPointerIdRef.current = null;
     driveSteerAnalogRef.current = 0;
     driveJoyPointerIdRef.current = null;
+    wheelPointerIdRef.current = null;
+    wheelPrevAngleRef.current = null;
+    wheelAngleDegRef.current = 0;
     lookPointerIdRef.current = null;
     lookPrevRef.current = null;
     setJoyKnob({ x: 0, y: 0, active: false });
     setDriveJoyKnob({ x: 0, active: false });
+    setWheelState({ angleDeg: 0, active: false });
     setJumpHeld(false);
     jumpHeldRef.current = false;
     engineRef.current?.setHornActive(false);
@@ -293,16 +258,21 @@ export default function App() {
     const container = canvasMountRef.current;
     if (!container) return;
 
-    const engine = new CityDriveEngine(container, {
-      onContextLost: (lost) => setContextLost(lost),
-      onDestinationChanged: (dest) => setActiveDestination(dest),
-      onTelemetry: (next) => setTelemetry(next),
-    });
-    engine.setCameraSensitivity(controlPrefsRef.current.cameraSensitivity);
-    engineRef.current = engine;
+    let engine: CityDriveEngine | null = null;
+    try {
+      engine = new CityDriveEngine(container, {
+        onContextLost: (lost) => setContextLost(lost),
+        onDestinationChanged: (dest) => setActiveDestination(dest),
+        onTelemetry: (next) => setTelemetry(next),
+      });
+      engine.setCameraSensitivity(controlPrefsRef.current.cameraSensitivity);
+      engineRef.current = engine;
+    } catch {
+      setContextLost(true);
+    }
 
     return () => {
-      engine.dispose();
+      engine?.dispose();
       engineRef.current = null;
     };
   }, []);
@@ -566,15 +536,60 @@ export default function App() {
     syncDrivingInput(false);
   };
 
+  // Driving Steering Wheel Handlers (turn left / CCW -> positive steerLeft)
+  const getWheelPointerAngle = (clientX: number, clientY: number): number | null => {
+    const el = wheelBaseRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width * 0.5;
+    const cy = rect.top + rect.height * 0.5;
+    const dx = clientX - cx;
+    const dy = clientY - cy;
+    if (Math.hypot(dx, dy) < 6) return null;
+    return Math.atan2(dy, dx);
+  };
+
+  const updateWheelFromEvent = (clientX: number, clientY: number) => {
+    const angle = getWheelPointerAngle(clientX, clientY);
+    if (angle === null) return;
+    if (wheelPrevAngleRef.current === null) {
+      wheelPrevAngleRef.current = angle;
+      return;
+    }
+    let deltaRad = angle - wheelPrevAngleRef.current;
+    while (deltaRad > Math.PI) deltaRad -= Math.PI * 2;
+    while (deltaRad < -Math.PI) deltaRad += Math.PI * 2;
+    wheelPrevAngleRef.current = angle;
+
+    const deltaDeg = (-deltaRad * 180) / Math.PI;
+    const nextDeg = Math.max(-135, Math.min(135, wheelAngleDegRef.current + deltaDeg));
+    wheelAngleDegRef.current = nextDeg;
+    setWheelState({ angleDeg: nextDeg, active: true });
+
+    driveSteerAnalogRef.current = Math.max(-1, Math.min(1, nextDeg / 90));
+    syncDrivingInput(false);
+  };
+
+  const resetWheel = () => {
+    wheelPointerIdRef.current = null;
+    wheelPrevAngleRef.current = null;
+    wheelAngleDegRef.current = 0;
+    driveSteerAnalogRef.current = 0;
+    setWheelState({ angleDeg: 0, active: false });
+    syncDrivingInput(false);
+  };
+
   const handleToggleFullscreen = async () => {
     try {
       if (!document.fullscreenElement) {
         await document.documentElement.requestFullscreen();
-        const orientation = screen.orientation as unknown as {
-          lock?: (mode: string) => Promise<void>;
-        };
-        if (orientation?.lock) {
-          orientation.lock('landscape').catch(() => {});
+        if (typeof screen !== 'undefined') {
+          const orientation = screen.orientation as unknown as {
+            lock?: (mode: string) => Promise<void>;
+          };
+          if (orientation?.lock) {
+            orientation.lock('landscape').catch(() => {});
+          }
         }
       } else {
         await document.exitFullscreen();
@@ -593,11 +608,13 @@ export default function App() {
       // Ignore fullscreen failures (e.g. iOS Safari)
     }
     try {
-      const orientation = screen.orientation as unknown as {
-        lock?: (mode: string) => Promise<void>;
-      };
-      if (orientation?.lock) {
-        await orientation.lock('landscape');
+      if (typeof screen !== 'undefined') {
+        const orientation = screen.orientation as unknown as {
+          lock?: (mode: string) => Promise<void>;
+        };
+        if (orientation?.lock) {
+          await orientation.lock('landscape');
+        }
       }
     } catch {
       // Ignore orientation lock failures
@@ -606,11 +623,6 @@ export default function App() {
 
   const handleSavePrefs = (next: ControlPreferences) => {
     setControlPrefs(next);
-    try {
-      window.localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // Ignore storage quota errors
-    }
     setCustomizerOpen(false);
   };
 
@@ -846,8 +858,8 @@ export default function App() {
           </div>
         )}
 
-        {/* Police Wanted Stars, Paid Fines Total & Pursuit Status (NO premature fine amounts!) */}
-        {(police.wantedLevel > 0 || police.totalFines > 0 || police.status !== 'patrol') && (
+        {/* Police Wanted Stars & Pursuit Status */}
+        {(police.wantedLevel > 0 || police.status !== 'patrol') && (
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-1 rounded-lg bg-slate-950/85 border border-white/15 px-2 py-1 shadow">
               {[1, 2, 3].map((lvl) => (
@@ -860,11 +872,6 @@ export default function App() {
                   }`}
                 />
               ))}
-              {police.totalFines > 0 && (
-                <span className="ml-1.5 font-mono text-[11px] font-semibold text-rose-300">
-                  Paid Fines: ${police.totalFines}
-                </span>
-              )}
             </div>
 
             {police.status === 'pursuit' && (
@@ -886,7 +893,7 @@ export default function App() {
 
             {police.status === 'escaped' && (
               <div className="rounded-lg bg-emerald-600/95 border border-emerald-300 px-2.5 py-1 text-[11px] font-bold text-white shadow">
-                ESCAPED POLICE — No Fine!
+                ESCAPED POLICE
               </div>
             )}
           </div>
@@ -1006,15 +1013,18 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   resetDriveJoystick();
-                  setSteerStickMode((s) => !s);
+                  resetWheel();
+                  setSteerMode((prev) =>
+                    prev === 'stick' ? 'buttons' : prev === 'buttons' ? 'wheel' : 'stick'
+                  );
                 }}
                 className={`rounded-lg border px-2 py-1 text-[10px] font-semibold cursor-pointer ${
-                  steerStickMode
+                  steerMode !== 'buttons'
                     ? 'bg-sky-500/25 border-sky-400/60 text-sky-200'
                     : 'bg-slate-950/85 border-white/15 text-slate-200 hover:text-white'
                 }`}
               >
-                {steerStickMode ? 'Stick' : 'L / R'}
+                {steerMode === 'stick' ? 'Stick' : steerMode === 'buttons' ? 'L / R' : 'Wheel'}
               </button>
 
               <button
@@ -1059,7 +1069,7 @@ export default function App() {
               </button>
             </div>
 
-            {steerStickMode ? (
+            {steerMode === 'stick' && (
               <div className="flex flex-col items-center gap-1">
                 <div
                   ref={driveJoyBaseRef}
@@ -1111,7 +1121,9 @@ export default function App() {
                   Steer Stick (A/D)
                 </span>
               </div>
-            ) : (
+            )}
+
+            {steerMode === 'buttons' && (
               <div className="flex items-center gap-2.5" role="group" aria-label="Steering Controls">
                 <button
                   type="button"
@@ -1142,6 +1154,127 @@ export default function App() {
                   <ArrowRight className="w-6 h-6" />
                   <span className="text-[10px] font-semibold mt-0.5">Right</span>
                 </button>
+              </div>
+            )}
+
+            {steerMode === 'wheel' && (
+              <div className="flex flex-col items-center gap-1">
+                <div
+                  ref={wheelBaseRef}
+                  aria-label="Steering Wheel"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    wheelPointerIdRef.current = e.pointerId;
+                    try {
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                    } catch {
+                      // Ignore
+                    }
+                    wheelPrevAngleRef.current = getWheelPointerAngle(e.clientX, e.clientY);
+                    setWheelState((prev) => ({ ...prev, active: true }));
+                  }}
+                  onPointerMove={(e) => {
+                    if (wheelPointerIdRef.current !== e.pointerId) return;
+                    e.preventDefault();
+                    updateWheelFromEvent(e.clientX, e.clientY);
+                  }}
+                  onPointerUp={(e) => {
+                    if (wheelPointerIdRef.current === e.pointerId) {
+                      resetWheel();
+                    }
+                  }}
+                  onPointerCancel={(e) => {
+                    if (wheelPointerIdRef.current === e.pointerId) {
+                      resetWheel();
+                    }
+                  }}
+                  onLostPointerCapture={resetWheel}
+                  className="relative w-[140px] h-[140px] rounded-full flex items-center justify-center touch-none cursor-grab active:cursor-grabbing select-none"
+                >
+                  <svg
+                    viewBox="0 0 140 140"
+                    style={{ transform: `rotate(${-wheelState.angleDeg}deg)` }}
+                    className={`w-[140px] h-[140px] pointer-events-none drop-shadow-xl ${
+                      wheelState.active ? '' : 'transition-transform duration-150 ease-out'
+                    }`}
+                  >
+                    {/* Subtle translucent backing */}
+                    <circle
+                      cx="70"
+                      cy="70"
+                      r="64"
+                      fill="rgba(2, 6, 23, 0.55)"
+                    />
+                    {/* Three Spokes (Left, Right, Bottom) */}
+                    <line
+                      x1="70"
+                      y1="70"
+                      x2="16"
+                      y2="64"
+                      stroke="#cbd5e1"
+                      strokeWidth="10"
+                      strokeLinecap="round"
+                    />
+                    <line
+                      x1="70"
+                      y1="70"
+                      x2="124"
+                      y2="64"
+                      stroke="#cbd5e1"
+                      strokeWidth="10"
+                      strokeLinecap="round"
+                    />
+                    <line
+                      x1="70"
+                      y1="70"
+                      x2="70"
+                      y2="124"
+                      stroke="#cbd5e1"
+                      strokeWidth="11"
+                      strokeLinecap="round"
+                    />
+                    {/* Outer Steering Rim */}
+                    <circle
+                      cx="70"
+                      cy="70"
+                      r="56"
+                      fill="none"
+                      stroke={wheelState.active ? '#38bdf8' : '#e2e8f0'}
+                      strokeWidth="12"
+                    />
+                    <circle
+                      cx="70"
+                      cy="70"
+                      r="56"
+                      fill="none"
+                      stroke="#0f172a"
+                      strokeWidth="3"
+                    />
+                    {/* Top 12-o'clock Center Stripe */}
+                    <rect
+                      x="66"
+                      y="8"
+                      width="8"
+                      height="12"
+                      rx="3"
+                      fill={wheelState.active ? '#facc15' : '#38bdf8'}
+                    />
+                    {/* Center Hub */}
+                    <circle
+                      cx="70"
+                      cy="70"
+                      r="20"
+                      fill="#1e293b"
+                      stroke={wheelState.active ? '#38bdf8' : '#94a3b8'}
+                      strokeWidth="3.5"
+                    />
+                    <circle cx="70" cy="70" r="7" fill="#38bdf8" />
+                  </svg>
+                </div>
+                <span className="text-[10px] font-semibold tracking-wide text-white/80 drop-shadow">
+                  Steer Wheel (A/D)
+                </span>
               </div>
             )}
           </div>
@@ -1520,22 +1653,14 @@ export default function App() {
             </div>
 
             <div className="mt-3 space-y-1.5">
-              {police.activeTicket.violations.map((v, idx) => (
+              {police.activeTicket.violations.map((reason, idx) => (
                 <div
-                  key={`${v.reason}-${idx}`}
-                  className="flex items-center justify-between rounded-lg bg-slate-950/70 px-3 py-2 text-xs"
+                  key={`${reason}-${idx}`}
+                  className="flex items-center rounded-lg bg-slate-950/70 px-3 py-2 text-xs"
                 >
-                  <span className="text-slate-200">{v.reason}</span>
-                  <span className="font-mono font-semibold text-rose-300">${v.fine}</span>
+                  <span className="text-slate-200">{reason}</span>
                 </div>
               ))}
-            </div>
-
-            <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-3 text-sm font-bold">
-              <span className="text-slate-200">Total Fine</span>
-              <span className="font-mono text-lg text-rose-400">
-                ${police.activeTicket.totalTicketFine}
-              </span>
             </div>
 
             <button
@@ -1546,7 +1671,7 @@ export default function App() {
               }}
               className="mt-4 w-full rounded-xl bg-sky-500 py-2.5 text-sm font-bold text-slate-950 hover:bg-sky-400 transition-colors cursor-pointer"
             >
-              Pay Fine & Continue
+              Continue
             </button>
           </div>
         </div>
