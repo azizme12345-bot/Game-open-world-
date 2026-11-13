@@ -1,0 +1,6 @@
+{
+  "name": "City Drive",
+  "description": "An anime-inspired 3D modern city driving prototype built with Three.js, featuring a third-person sports car showcase on a sunlit urban boulevard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
