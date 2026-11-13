@@ -248,6 +248,11 @@ export class CityDriveEngine {
     gyroSteer: 0,
   };
   private gear: GearMode = 'D';
+  private carHealth = 100;
+  private repairing = false;
+  private repairProgress = 0;
+  private damageCooldown = 0;
+  private readonly repairSeconds = 2.5;
   private carX = 0;
   private carZ = 0;
   private carSpeed = 0;
@@ -478,9 +483,19 @@ export class CityDriveEngine {
     cityAudio.setHorn(active && this.playerMode === 'driving');
   }
 
+  public startRepair(): void {
+    if (this.playerMode !== 'driving') return;
+    if (this.carHealth >= 100) return;
+    if (Math.abs(this.carSpeed) > 0.8) return;
+    this.repairing = true;
+    this.repairProgress = 0;
+  }
+
   public exitVehicle(): void {
     if (this.playerMode !== 'driving') return;
     cityAudio.setHorn(false);
+    this.repairing = false;
+    this.repairProgress = 0;
     this.carSpeed = 0;
 
     // Leave active vehicle parked safely in the world
@@ -649,10 +664,12 @@ export class CityDriveEngine {
   }
 
   private updateDriving(elapsed: number, dt: number): void {
+    this.damageCooldown = Math.max(0, this.damageCooldown - dt);
     const spec = VEHICLE_HANDLING[this.activeVehicleKind];
-    const MAX_FWD_SPEED = spec.maxFwdSpeed;
+    const powerFactor = 0.35 + 0.65 * (this.carHealth / 100);
+    const MAX_FWD_SPEED = spec.maxFwdSpeed * powerFactor;
     const MAX_REV_SPEED = spec.maxRevSpeed;
-    const ACCEL_RATE = spec.accelRate;
+    const ACCEL_RATE = spec.accelRate * powerFactor;
     const BRAKE_RATE = spec.brakeRate;
     const HANDBRAKE_RATE = 38.0;
     const REVERSE_RATE = 9.5;
@@ -752,11 +769,19 @@ export class CityDriveEngine {
     const driftBoost = handbrake && Math.abs(this.carSpeed) > 7 ? 1.32 : 1.0;
     this.carHeading += this.steerAngle * spec.turnRate * driftBoost * speedFactor * dirSign * dt;
 
+    if (
+      (handbrake && Math.abs(this.carSpeed) > 7) ||
+      (Math.abs(this.steerAngle) > 0.28 && Math.abs(this.carSpeed) > 12)
+    ) {
+      cityAudio.playScreech();
+    }
+
     const fwdX = -Math.sin(this.carHeading);
     const fwdZ = -Math.cos(this.carHeading);
     const rawNextX = this.carX + fwdX * this.carSpeed * dt;
     const rawNextZ = this.carZ + fwdZ * this.carSpeed * dt;
 
+    const speedBefore = Math.abs(this.carSpeed);
     const roadResolved = resolveRoadPosition(rawNextX, rawNextZ, this.carSpeed);
     const trafficResolved = this.traffic.resolvePlayerCollision(
       roadResolved.x,
@@ -793,6 +818,19 @@ export class CityDriveEngine {
     this.carX = policeResolved.x;
     this.carZ = policeResolved.z;
     this.carSpeed = policeResolved.speed;
+
+    if (this.collidedThisStep) {
+      const lostSpeed = speedBefore - Math.abs(this.carSpeed);
+      if (lostSpeed >= 2.5 && this.damageCooldown <= 0) {
+        const strength = THREE.MathUtils.clamp((lostSpeed - 2.5) / 9, 0, 1);
+        const damage = 4 + strength * 22;
+        this.carHealth = Math.max(0, this.carHealth - damage);
+        this.damageCooldown = 0.45;
+        this.repairing = false;
+        this.repairProgress = 0;
+        cityAudio.playCrash(0.25 + strength * 0.75);
+      }
+    }
 
     const nextY = groundHeightAt(this.carX, this.carZ);
     const pitch = groundPitchAt(this.carX, this.carZ, this.carHeading);
@@ -1189,9 +1227,25 @@ export class CityDriveEngine {
       isOnFoot
     );
 
+    if (this.repairing) {
+      if (this.playerMode !== 'driving' || Math.abs(this.carSpeed) > 0.8) {
+        this.repairing = false;
+        this.repairProgress = 0;
+      } else {
+        this.repairProgress = Math.min(1, this.repairProgress + dt / this.repairSeconds);
+        if (this.repairProgress >= 1) {
+          this.carHealth = 100;
+          this.repairing = false;
+          this.repairProgress = 0;
+        }
+      }
+    }
+
     // Handle physical arrest transition cleanly
     if (policeResult.hudState.status === 'arrested' && this.playerMode !== 'arrested') {
       cityAudio.setHorn(false);
+      this.repairing = false;
+      this.repairProgress = 0;
       if (this.playerMode === 'driving') {
         this.carSpeed = 0;
         if (this.activeVehicleId === PLAYER_BLUE_SPORTS_ID) {
@@ -1214,6 +1268,11 @@ export class CityDriveEngine {
       this.walkSpeed = 0;
     }
 
+    const activeSpec = VEHICLE_HANDLING[this.activeVehicleKind];
+    const engineLoad = Math.abs(this.carSpeed) / activeSpec.maxFwdSpeed;
+    cityAudio.setEngine(this.playerMode === 'driving', engineLoad);
+    cityAudio.setSiren(policeResult.hudState.status === 'pursuit');
+
     this.pedestrians.update(elapsed, dt);
     this.city.update(elapsed);
     this.updateCamera(dt);
@@ -1228,6 +1287,9 @@ export class CityDriveEngine {
           Math.abs(this.playerMode === 'driving' ? this.carSpeed : this.walkSpeed) * 3.6
         ),
         gear: this.gear,
+        carHealth: Math.round(this.carHealth),
+        repairing: this.repairing,
+        repairProgress: this.repairProgress,
         timeOfDayLabel: this.timeOfDayLabel,
         weather: this.weatherMode,
         nearbyVehicle: this.playerMode === 'walking' ? this.nearbyVehicle : null,

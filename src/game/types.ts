@@ -66,6 +66,9 @@ export interface HudTelemetry {
   activeVehicleLabel: string;
   speedKmh: number;
   gear: GearMode;
+  carHealth: number;
+  repairing: boolean;
+  repairProgress: number;
   timeOfDayLabel: 'Day' | 'Sunset' | 'Night';
   weather: WeatherMode;
   nearbyVehicle: NearbyVehiclePrompt | null;

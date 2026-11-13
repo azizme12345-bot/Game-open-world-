@@ -67,6 +67,9 @@ const INITIAL_TELEMETRY: HudTelemetry = {
   activeVehicleLabel: 'Blue Sports Car',
   speedKmh: 0,
   gear: 'D',
+  carHealth: 100,
+  repairing: false,
+  repairProgress: 0,
   timeOfDayLabel: 'Day',
   weather: 'clear',
   nearbyVehicle: null,
@@ -207,8 +210,7 @@ export default function App() {
 
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [contextLost, setContextLost] = useState(false);
-  const [isPortrait, setIsPortrait] = useState(false);
-  const [dismissPortraitHint, setDismissPortraitHint] = useState(false);
+  const [isTouchPortrait, setIsTouchPortrait] = useState(false);
   const [activeControls, setActiveControls] = useState<Record<ButtonControlKey, boolean>>({
     ...EMPTY_BUTTONS,
   });
@@ -310,11 +312,11 @@ export default function App() {
     engineRef.current?.setCameraSensitivity(controlPrefs.cameraSensitivity);
   }, [controlPrefs.cameraSensitivity]);
 
-  // Track Fullscreen & Portrait state
+  // Track Fullscreen & Touch-Phone Portrait state
   useEffect(() => {
     const checkOrientation = () => {
-      const portrait = window.innerHeight > window.innerWidth && window.innerWidth < 768;
-      setIsPortrait(portrait);
+      const coarse = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+      setIsTouchPortrait(coarse && window.innerHeight > window.innerWidth);
     };
     const onFsChange = () => {
       setIsFullscreen(Boolean(document.fullscreenElement));
@@ -582,6 +584,26 @@ export default function App() {
     }
   };
 
+  const handleTryFullscreenLandscape = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch {
+      // Ignore fullscreen failures (e.g. iOS Safari)
+    }
+    try {
+      const orientation = screen.orientation as unknown as {
+        lock?: (mode: string) => Promise<void>;
+      };
+      if (orientation?.lock) {
+        await orientation.lock('landscape');
+      }
+    } catch {
+      // Ignore orientation lock failures
+    }
+  };
+
   const handleSavePrefs = (next: ControlPreferences) => {
     setControlPrefs(next);
     try {
@@ -645,6 +667,9 @@ export default function App() {
     mode,
     activeVehicleLabel,
     speedKmh,
+    carHealth,
+    repairing,
+    repairProgress,
     timeOfDayLabel,
     navTurn,
     nearbyVehicle,
@@ -782,6 +807,45 @@ export default function App() {
           </div>
         </div>
 
+        {/* Car Health & Repair Badge (Driving mode only, directly below speedometer) */}
+        {isDrivingHud && (
+          <div className="flex items-center gap-2 self-start rounded-lg bg-slate-950/85 border border-white/15 px-2 py-1 text-xs text-white shadow">
+            <span className="text-[11px] font-semibold text-slate-200">Car</span>
+            <div className="w-20 h-2 rounded-full bg-slate-800 overflow-hidden border border-white/10">
+              <div
+                style={{ width: `${carHealth}%` }}
+                className={`h-full transition-all duration-150 ${
+                  carHealth > 50
+                    ? 'bg-emerald-500'
+                    : carHealth > 20
+                      ? 'bg-amber-400'
+                      : 'bg-rose-500'
+                }`}
+              />
+            </div>
+            <span className="font-mono text-[11px] font-bold text-slate-100">{carHealth}%</span>
+            {carHealth < 100 &&
+              (repairing ? (
+                <span className="text-[11px] font-semibold text-sky-300">
+                  Repairing {Math.round(repairProgress * 100)}%
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  disabled={speedKmh > 2}
+                  onClick={() => engineRef.current?.startRepair()}
+                  className={`pointer-events-auto rounded px-2 py-0.5 text-[11px] font-semibold transition-colors ${
+                    speedKmh > 2
+                      ? 'bg-slate-800 text-slate-500 border border-white/10 cursor-not-allowed'
+                      : 'bg-sky-500 text-slate-950 hover:bg-sky-400 cursor-pointer'
+                  }`}
+                >
+                  Repair
+                </button>
+              ))}
+          </div>
+        )}
+
         {/* Police Wanted Stars, Paid Fines Total & Pursuit Status (NO premature fine amounts!) */}
         {(police.wantedLevel > 0 || police.totalFines > 0 || police.status !== 'patrol') && (
           <div className="flex flex-wrap items-center gap-2">
@@ -840,17 +904,22 @@ export default function App() {
         }}
       />
 
-      {/* Non-blocking Portrait Orientation Prompt for Mobile Devices */}
-      {isPortrait && !dismissPortraitHint && (
-        <div className="absolute top-24 left-3 z-20 flex items-center gap-2 rounded-xl bg-slate-950/85 border border-white/15 px-3 py-2 text-xs text-slate-100 shadow-lg">
-          <RotateCw className="w-4 h-4 text-sky-400 shrink-0" />
-          <span className="whitespace-nowrap">Rotate to landscape for best gameplay</span>
+      {/* Full-Screen Landscape Prompt Overlay (touch phones in portrait only) */}
+      {isTouchPortrait && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-slate-950/95 p-6 text-center text-white">
+          <div className="rounded-2xl bg-sky-500/15 border border-sky-400/30 p-4 text-sky-300">
+            <RotateCw className="w-10 h-10" />
+          </div>
+          <h2 className="font-display text-xl font-bold text-white">Turn your phone sideways</h2>
+          <p className="max-w-xs text-sm text-slate-300">
+            City Drive is played in landscape with both thumbs. Rotate your phone to start.
+          </p>
           <button
             type="button"
-            onClick={() => setDismissPortraitHint(true)}
-            className="ml-1 rounded px-2 py-1 text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+            onClick={handleTryFullscreenLandscape}
+            className="rounded-xl bg-sky-500 px-5 py-2.5 text-sm font-bold text-slate-950 hover:bg-sky-400 transition-colors cursor-pointer shadow-lg"
           >
-            OK
+            Try Fullscreen Landscape
           </button>
         </div>
       )}
