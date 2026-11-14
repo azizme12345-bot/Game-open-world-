@@ -152,7 +152,7 @@ export function createPoliceSystem(): PoliceSystemHandle {
   });
 
   const buildOfficerRig = (idx: number): PoliceOfficerRig => {
-    const skinTones = [0xf6d3b6, 0xd8a882, 0xf2c6a0];
+    const skinTones = [0xf3cbb0, 0xc88b5d, 0x6b3e26];
     const human = createSkeletalHumanCharacter({
       role: 'police',
       skinColor: skinTones[idx % skinTones.length],

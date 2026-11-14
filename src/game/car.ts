@@ -146,77 +146,122 @@ export function createBlueSportsCar(
     })
   );
 
-  // --- 1. Primary Silhouette: Sculpted Aerodynamic Chassis (ExtrudeGeometry) ---
-  // Side profile in X-Y (extruded along Z, then rotated so car faces -Z)
-  // Profile X maps to car length (-2.22 rear to +2.22 front before rotation)
+  // --- 1. Lower Sports Chassis Hull (beltline & below, with open wheel arches) ---
+  // Side profile in X-Y (extruded along Z, then rotated so +X becomes -Z forward)
   const chassisShape = new THREE.Shape();
-  chassisShape.moveTo(-2.15, 0.22); // rear lower diffuser edge
-  chassisShape.lineTo(2.12, 0.19); // front splitter edge
-  chassisShape.lineTo(2.24, 0.34); // sharp front nose tip
-  chassisShape.lineTo(2.12, 0.56); // nose crest
-  chassisShape.lineTo(1.25, 0.72); // sculpted hood slope
-  chassisShape.lineTo(0.45, 1.14); // windshield rake
-  chassisShape.lineTo(-0.42, 1.17); // sleek coupe roof apex
-  chassisShape.lineTo(-1.38, 0.88); // fastback rear glass slope
-  chassisShape.lineTo(-2.06, 0.84); // raised rear decklid
-  chassisShape.lineTo(-2.18, 0.52); // rear fascia drop
+  chassisShape.moveTo(-2.14, 0.28); // rear lower edge
+  chassisShape.lineTo(-1.76, 0.26); // rear wheel arch back bottom
+  chassisShape.lineTo(-1.66, 0.56);
+  chassisShape.lineTo(-1.48, 0.75); // rear wheel arch top back
+  chassisShape.lineTo(-1.20, 0.75); // rear wheel arch top front
+  chassisShape.lineTo(-1.00, 0.56);
+  chassisShape.lineTo(-0.92, 0.23); // rear wheel arch front bottom
+  chassisShape.lineTo(0.94, 0.21);  // center rocker sill
+  chassisShape.lineTo(1.02, 0.54);  // front wheel arch back
+  chassisShape.lineTo(1.20, 0.74);  // front wheel arch top back
+  chassisShape.lineTo(1.52, 0.74);  // front wheel arch top front
+  chassisShape.lineTo(1.70, 0.54);
+  chassisShape.lineTo(1.78, 0.23);  // front wheel arch front bottom
+  chassisShape.lineTo(2.14, 0.23);  // front chin edge
+  chassisShape.lineTo(2.24, 0.42);  // sharp front nose tip
+  chassisShape.lineTo(2.12, 0.59);  // nose crest
+  chassisShape.lineTo(1.55, 0.71);  // sculpted hood slope
+  chassisShape.lineTo(0.84, 0.79);  // cowl / windshield base
+  chassisShape.lineTo(-0.85, 0.84); // beltline along doors
+  chassisShape.lineTo(-1.46, 0.89); // rear haunch kick-up
+  chassisShape.lineTo(-2.10, 0.85); // flat rear decklid
+  chassisShape.lineTo(-2.18, 0.54); // crisp rear fascia drop
   chassisShape.closePath();
 
   const chassisGeo = trackGeo(
     new THREE.ExtrudeGeometry(chassisShape, {
       steps: 1,
-      depth: 1.56,
+      depth: 1.66,
       bevelEnabled: true,
-      bevelThickness: 0.14,
-      bevelSize: 0.07,
-      bevelSegments: 3,
+      bevelThickness: 0.04,
+      bevelSize: 0.03,
+      bevelSegments: 2,
     })
   );
-  chassisGeo.translate(0, 0, -0.78);
-  // Rotate so profile +X becomes -Z (forward)
-  chassisGeo.rotateY(Math.PI / 2);
+  chassisGeo.translate(0, 0, -0.83);
+  chassisGeo.rotateY(Math.PI / 2); // +X -> -Z forward, width spans X = -0.87 .. +0.87
 
   const chassisMesh = new THREE.Mesh(chassisGeo, bluePaintMat);
   chassisMesh.castShadow = true;
   chassisMesh.receiveShadow = true;
   sprungBody.add(chassisMesh);
 
-  // --- 2. Sculpted Fender Haunches (Left & Right muscular wheel-arch shoulders) ---
-  const fenderGeo = trackGeo(new THREE.BoxGeometry(0.24, 0.34, 4.18));
-  [-0.84, 0.84].forEach((xPos) => {
-    const fender = new THREE.Mesh(fenderGeo, bluePaintMat);
-    fender.position.set(xPos, 0.52, 0.02);
-    fender.castShadow = true;
-    fender.receiveShadow = true;
-    sprungBody.add(fender);
+  // Dark inner wheel-well liners / underbody floor so light doesn't bleed across the arches
+  const underbody = new THREE.Mesh(
+    trackGeo(new THREE.BoxGeometry(1.42, 0.46, 4.1)),
+    carbonTrimMat
+  );
+  underbody.position.set(0, 0.48, 0);
+  sprungBody.add(underbody);
+
+  // --- 2. Sculpted Fender Flares & Door Shoulders (cleanly ABOVE wheel arches) ---
+  const doorShoulderGeo = trackGeo(new THREE.BoxGeometry(0.16, 0.42, 1.72));
+  const archLipGeo = trackGeo(new THREE.BoxGeometry(0.18, 0.14, 0.88));
+  [-0.88, 0.88].forEach((xPos) => {
+    const door = new THREE.Mesh(doorShoulderGeo, bluePaintMat);
+    door.position.set(xPos, 0.54, 0.0);
+    door.castShadow = true;
+    door.receiveShadow = true;
+    sprungBody.add(door);
+
+    const frontLip = new THREE.Mesh(archLipGeo, bluePaintMat);
+    frontLip.position.set(xPos, 0.77, -1.36);
+    frontLip.castShadow = true;
+    sprungBody.add(frontLip);
+
+    const rearLip = new THREE.Mesh(archLipGeo, bluePaintMat);
+    rearLip.position.set(xPos, 0.79, 1.34);
+    rearLip.castShadow = true;
+    sprungBody.add(rearLip);
   });
 
-  // --- 3. Tinted Fastback Cabin Glass Canopy ---
+  // --- 3. Tapered Fastback Cabin Greenhouse + Roof Cap + C-Pillars ---
   const canopyShape = new THREE.Shape();
-  canopyShape.moveTo(-1.26, 0.86);
-  canopyShape.lineTo(-0.4, 1.19);
-  canopyShape.lineTo(0.42, 1.16);
-  canopyShape.lineTo(1.18, 0.76);
-  canopyShape.lineTo(0.32, 0.78);
-  canopyShape.lineTo(-1.18, 0.78);
+  canopyShape.moveTo(-1.46, 0.77);
+  canopyShape.lineTo(-0.46, 1.19);
+  canopyShape.lineTo(0.36, 1.17);
+  canopyShape.lineTo(0.88, 0.76);
   canopyShape.closePath();
 
   const canopyGeo = trackGeo(
     new THREE.ExtrudeGeometry(canopyShape, {
       steps: 1,
-      depth: 1.32,
+      depth: 1.30,
       bevelEnabled: true,
-      bevelThickness: 0.07,
-      bevelSize: 0.05,
+      bevelThickness: 0.04,
+      bevelSize: 0.02,
       bevelSegments: 2,
     })
   );
-  canopyGeo.translate(0, 0, -0.66);
-  canopyGeo.rotateY(Math.PI / 2);
+  canopyGeo.translate(0, 0, -0.65);
+  canopyGeo.rotateY(Math.PI / 2); // spans X = -0.69 .. +0.69 (clearly narrower than lower shoulders)
 
   const canopyMesh = new THREE.Mesh(canopyGeo, cabinGlassMat);
   canopyMesh.castShadow = true;
   sprungBody.add(canopyMesh);
+
+  // Blue painted roof panel & C-pillar buttresses framing the rear window
+  const roofCap = new THREE.Mesh(
+    trackGeo(new THREE.BoxGeometry(1.26, 0.055, 0.84)),
+    bluePaintMat
+  );
+  roofCap.position.set(0, 1.21, 0.05);
+  roofCap.castShadow = true;
+  sprungBody.add(roofCap);
+
+  const cPillarGeo = trackGeo(new THREE.BoxGeometry(0.11, 0.09, 1.06));
+  [-0.65, 0.65].forEach((px) => {
+    const cPillar = new THREE.Mesh(cPillarGeo, bluePaintMat);
+    cPillar.position.set(px, 1.03, 0.94);
+    cPillar.rotation.x = -0.36;
+    cPillar.castShadow = true;
+    sprungBody.add(cPillar);
+  });
 
   // --- 3b. Sculpted Cockpit Interior (Bucket Seats, Dashboard & Sport Steering Wheel) ---
   const seatGeo = trackGeo(new THREE.BoxGeometry(0.42, 0.44, 0.38));
@@ -237,51 +282,51 @@ export function createBlueSportsCar(
   sprungBody.add(steerWheel);
 
   // --- 4. Carbon-Fiber Aero Package (Front Splitter, Side Skirts, Rear Diffuser) ---
-  const splitterGeo = trackGeo(new THREE.BoxGeometry(1.94, 0.06, 0.42));
+  const splitterGeo = trackGeo(new THREE.BoxGeometry(1.86, 0.06, 0.40));
   const splitter = new THREE.Mesh(splitterGeo, carbonTrimMat);
-  splitter.position.set(0, 0.16, -2.14);
+  splitter.position.set(0, 0.19, -2.14);
   splitter.castShadow = true;
   sprungBody.add(splitter);
 
-  const skirtGeo = trackGeo(new THREE.BoxGeometry(0.14, 0.09, 2.58));
-  [-0.92, 0.92].forEach((xPos) => {
+  const skirtGeo = trackGeo(new THREE.BoxGeometry(0.14, 0.09, 1.84));
+  [-0.91, 0.91].forEach((xPos) => {
     const skirt = new THREE.Mesh(skirtGeo, carbonTrimMat);
-    skirt.position.set(xPos, 0.19, 0.0);
+    skirt.position.set(xPos, 0.21, 0.0);
     skirt.castShadow = true;
     sprungBody.add(skirt);
   });
 
-  const diffuserGeo = trackGeo(new THREE.BoxGeometry(1.72, 0.24, 0.34));
+  const diffuserGeo = trackGeo(new THREE.BoxGeometry(1.64, 0.22, 0.32));
   const diffuser = new THREE.Mesh(diffuserGeo, carbonTrimMat);
-  diffuser.position.set(0, 0.27, 2.08);
+  diffuser.position.set(0, 0.29, 2.08);
   diffuser.castShadow = true;
   sprungBody.add(diffuser);
 
   // Diffuser vertical aero fins
   const finGeo = trackGeo(new THREE.BoxGeometry(0.04, 0.2, 0.26));
-  [-0.5, -0.18, 0.18, 0.5].forEach((xPos) => {
+  [-0.46, -0.16, 0.16, 0.46].forEach((xPos) => {
     const fin = new THREE.Mesh(finGeo, carbonTrimMat);
-    fin.position.set(xPos, 0.24, 2.16);
+    fin.position.set(xPos, 0.26, 2.16);
     sprungBody.add(fin);
   });
 
   // --- 5. Elevated GT Rear Wing Spoiler + Twin Pylons ---
-  const wingBladeGeo = trackGeo(new THREE.BoxGeometry(1.82, 0.05, 0.32));
+  const wingBladeGeo = trackGeo(new THREE.BoxGeometry(1.80, 0.055, 0.32));
   const wingBlade = new THREE.Mesh(wingBladeGeo, carbonTrimMat);
-  wingBlade.position.set(0, 1.11, 1.98);
+  wingBlade.position.set(0, 1.10, 1.98);
   wingBlade.rotation.x = 0.1; // subtle downforce angle
   wingBlade.castShadow = true;
   sprungBody.add(wingBlade);
 
-  const wingEndplateGeo = trackGeo(new THREE.BoxGeometry(0.04, 0.16, 0.36));
-  [-0.91, 0.91].forEach((xPos) => {
+  const wingEndplateGeo = trackGeo(new THREE.BoxGeometry(0.045, 0.17, 0.36));
+  [-0.90, 0.90].forEach((xPos) => {
     const endplate = new THREE.Mesh(wingEndplateGeo, bluePaintMat);
-    endplate.position.set(xPos, 1.1, 1.98);
+    endplate.position.set(xPos, 1.09, 1.98);
     endplate.castShadow = true;
     sprungBody.add(endplate);
   });
 
-  const pylonGeo = trackGeo(new THREE.BoxGeometry(0.05, 0.28, 0.14));
+  const pylonGeo = trackGeo(new THREE.BoxGeometry(0.05, 0.26, 0.14));
   [-0.46, 0.46].forEach((xPos) => {
     const pylon = new THREE.Mesh(pylonGeo, carbonTrimMat);
     pylon.position.set(xPos, 0.96, 1.94);
@@ -290,9 +335,9 @@ export function createBlueSportsCar(
   });
 
   // --- 6. Front Grille & Side Intakes ---
-  const grilleGeo = trackGeo(new THREE.BoxGeometry(1.38, 0.2, 0.08));
+  const grilleGeo = trackGeo(new THREE.BoxGeometry(1.36, 0.2, 0.08));
   const grille = new THREE.Mesh(grilleGeo, carbonTrimMat);
-  grille.position.set(0, 0.33, -2.23);
+  grille.position.set(0, 0.35, -2.23);
   sprungBody.add(grille);
 
   // --- 7. Sleek Side Wing Mirrors ---
@@ -300,99 +345,113 @@ export function createBlueSportsCar(
   const mirrorCapGeo = trackGeo(new THREE.BoxGeometry(0.2, 0.1, 0.14));
   [-1, 1].forEach((side) => {
     const arm = new THREE.Mesh(mirrorArmGeo, carbonTrimMat);
-    arm.position.set(side * 0.92, 0.8, -0.54);
+    arm.position.set(side * 0.90, 0.84, -0.54);
     sprungBody.add(arm);
 
     const cap = new THREE.Mesh(mirrorCapGeo, bluePaintMat);
-    cap.position.set(side * 1.03, 0.83, -0.52);
+    cap.position.set(side * 1.01, 0.87, -0.52);
     cap.castShadow = true;
     sprungBody.add(cap);
   });
 
   // --- 8. LED Headlights & Iconic Rear Tail-Light Bar ---
   const headlightGeo = trackGeo(new THREE.BoxGeometry(0.38, 0.08, 0.12));
-  [-0.66, 0.66].forEach((xPos) => {
+  [-0.64, 0.64].forEach((xPos) => {
     const hl = new THREE.Mesh(headlightGeo, headlightMat);
-    hl.position.set(xPos, 0.51, -2.18);
+    hl.position.set(xPos, 0.53, -2.18);
     hl.rotation.y = xPos < 0 ? 0.18 : -0.18;
     sprungBody.add(hl);
   });
 
   // Sleek full-width anime LED tail-light bar + side signatures
-  const tailBarGeo = trackGeo(new THREE.BoxGeometry(1.58, 0.06, 0.07));
+  const tailBarGeo = trackGeo(new THREE.BoxGeometry(1.56, 0.06, 0.07));
   const tailBar = new THREE.Mesh(tailBarGeo, taillightMat);
-  tailBar.position.set(0, 0.72, 2.17);
+  tailBar.position.set(0, 0.74, 2.17);
   sprungBody.add(tailBar);
 
   const tailPodGeo = trackGeo(new THREE.BoxGeometry(0.34, 0.11, 0.08));
-  [-0.66, 0.66].forEach((xPos) => {
+  [-0.64, 0.64].forEach((xPos) => {
     const pod = new THREE.Mesh(tailPodGeo, taillightMat);
-    pod.position.set(xPos, 0.71, 2.18);
+    pod.position.set(xPos, 0.73, 2.18);
     sprungBody.add(pod);
   });
 
   // Rear license plate
   const plateGeo = trackGeo(new THREE.BoxGeometry(0.44, 0.14, 0.03));
   const plate = new THREE.Mesh(plateGeo, plateMat);
-  plate.position.set(0, 0.5, 2.18);
+  plate.position.set(0, 0.53, 2.18);
   sprungBody.add(plate);
 
   // --- 9. Twin Chrome Exhaust Pipes (Left & Right pairs) ---
   const exhaustGeo = trackGeo(new THREE.CylinderGeometry(0.055, 0.055, 0.16, 16));
   exhaustGeo.rotateX(Math.PI / 2);
-  [-0.68, -0.52, 0.52, 0.68].forEach((xPos) => {
+  [-0.66, -0.50, 0.50, 0.66].forEach((xPos) => {
     const pipe = new THREE.Mesh(exhaustGeo, chromeMat);
-    pipe.position.set(xPos, 0.25, 2.22);
+    pipe.position.set(xPos, 0.27, 2.22);
     sprungBody.add(pipe);
   });
 
-  // --- 10. Four Multi-Part Wheel Assemblies (grounded at y = 0) ---
-  const wheelRadius = 0.34;
-  const tireWidth = 0.26;
-  const tireGeo = trackGeo(
-    new THREE.CylinderGeometry(wheelRadius, wheelRadius, tireWidth, 28)
-  );
-  tireGeo.rotateZ(Math.PI / 2);
+  // --- 10. Four Multi-Part Wheel Assemblies (clearly visible & grounded at y = 0) ---
+  const wheelRadius = 0.36;
+  const frontTireWidth = 0.28;
+  const rearTireWidth = 0.32;
 
-  const rimBarrelGeo = trackGeo(
-    new THREE.CylinderGeometry(0.24, 0.24, tireWidth + 0.015, 20)
+  const frontTireGeo = trackGeo(
+    new THREE.CylinderGeometry(wheelRadius, wheelRadius, frontTireWidth, 28)
   );
-  rimBarrelGeo.rotateZ(Math.PI / 2);
+  frontTireGeo.rotateZ(Math.PI / 2);
 
-  const spokeGeo = trackGeo(new THREE.BoxGeometry(tireWidth + 0.03, 0.42, 0.045));
-  const hubGeo = trackGeo(new THREE.CylinderGeometry(0.065, 0.065, tireWidth + 0.04, 14));
+  const rearTireGeo = trackGeo(
+    new THREE.CylinderGeometry(wheelRadius, wheelRadius, rearTireWidth, 28)
+  );
+  rearTireGeo.rotateZ(Math.PI / 2);
+
+  const frontRimBarrelGeo = trackGeo(
+    new THREE.CylinderGeometry(0.24, 0.24, frontTireWidth + 0.015, 20)
+  );
+  frontRimBarrelGeo.rotateZ(Math.PI / 2);
+
+  const rearRimBarrelGeo = trackGeo(
+    new THREE.CylinderGeometry(0.24, 0.24, rearTireWidth + 0.015, 20)
+  );
+  rearRimBarrelGeo.rotateZ(Math.PI / 2);
+
+  const frontSpokeGeo = trackGeo(new THREE.BoxGeometry(frontTireWidth + 0.02, 0.44, 0.045));
+  const rearSpokeGeo = trackGeo(new THREE.BoxGeometry(rearTireWidth + 0.02, 0.44, 0.045));
+  const hubGeo = trackGeo(new THREE.CylinderGeometry(0.068, 0.068, rearTireWidth + 0.03, 14));
   hubGeo.rotateZ(Math.PI / 2);
 
   const caliperGeo = trackGeo(new THREE.BoxGeometry(0.08, 0.15, 0.1));
 
-  const wheelPositions: [number, number, number][] = [
-    [-0.9, wheelRadius, -1.36], // Front Left
-    [0.9, wheelRadius, -1.36], // Front Right
-    [-0.9, wheelRadius, 1.34], // Rear Left
-    [0.9, wheelRadius, 1.34], // Rear Right
+  const wheelPositions: { x: number; y: number; z: number; isRear: boolean }[] = [
+    { x: -0.88, y: wheelRadius, z: -1.36, isRear: false }, // Front Left
+    { x: 0.88, y: wheelRadius, z: -1.36, isRear: false }, // Front Right
+    { x: -0.90, y: wheelRadius, z: 1.34, isRear: true }, // Rear Left
+    { x: 0.90, y: wheelRadius, z: 1.34, isRear: true }, // Rear Right
   ];
 
   const wheels: THREE.Group[] = [];
   const wheelSpinGroups: THREE.Group[] = [];
 
-  wheelPositions.forEach(([wx, wy, wz]) => {
+  wheelPositions.forEach(({ x: wx, y: wy, z: wz, isRear }) => {
     const wheelGroup = new THREE.Group();
     wheelGroup.position.set(wx, wy, wz);
 
     // Spinning sub-assembly (tire + rim + spokes + hub)
     const spinGroup = new THREE.Group();
 
-    const tire = new THREE.Mesh(tireGeo, rubberTireMat);
+    const tire = new THREE.Mesh(isRear ? rearTireGeo : frontTireGeo, rubberTireMat);
     tire.castShadow = true;
     tire.receiveShadow = true;
     spinGroup.add(tire);
 
-    const rim = new THREE.Mesh(rimBarrelGeo, alloyRimMat);
+    const rim = new THREE.Mesh(isRear ? rearRimBarrelGeo : frontRimBarrelGeo, alloyRimMat);
     spinGroup.add(rim);
 
     // 5-spoke star alloy pattern
+    const sGeo = isRear ? rearSpokeGeo : frontSpokeGeo;
     for (let s = 0; s < 5; s++) {
-      const spoke = new THREE.Mesh(spokeGeo, alloyRimMat);
+      const spoke = new THREE.Mesh(sGeo, alloyRimMat);
       spoke.rotation.x = (s * Math.PI) / 5;
       spinGroup.add(spoke);
     }

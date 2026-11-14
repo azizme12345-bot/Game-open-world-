@@ -15,6 +15,8 @@ import { createAnimeSkyDome, type SkyDomeHandle } from './sky';
 import {
   groundHeightAt,
   groundPitchAt,
+  isObstacleOrWaterBlocked,
+  isOnPavedRoad,
   resolveRoadPosition,
   resolveWalkPosition,
   type LandmarkLocation,
@@ -92,6 +94,27 @@ const CAMERA_PRESETS: Record<CameraPreset, CameraSphericalState> = {
     lookZOffset: -4.2,
     lookYOffset: 1.35,
   },
+  driver: {
+    azimuth: 0.0,
+    elevation: 0.0,
+    distance: 0.01,
+    lookZOffset: -18.0,
+    lookYOffset: 1.15,
+  },
+};
+
+const DRIVER_SEAT_OFFSETS: Record<VehicleKind, { side: number; height: number; fwd: number }> = {
+  sports: { side: -0.35, height: 1.15, fwd: 0.08 },
+  car: { side: -0.36, height: 1.32, fwd: 0.15 },
+  vip: { side: -0.36, height: 1.34, fwd: 0.15 },
+  pickup: { side: -0.38, height: 1.56, fwd: 0.25 },
+  bus: { side: -0.55, height: 2.08, fwd: 2.2 },
+  truck: { side: -0.52, height: 2.15, fwd: 1.4 },
+  tank: { side: 0.0, height: 2.05, fwd: 0.8 },
+  motorcycle: { side: 0.0, height: 1.38, fwd: 0.05 },
+  tractor: { side: 0.0, height: 1.85, fwd: -0.2 },
+  airplane: { side: 0.0, height: 1.65, fwd: 0.6 },
+  helicopter: { side: -0.3, height: 1.65, fwd: 0.6 },
 };
 
 interface VehicleHandlingSpec {
@@ -280,7 +303,28 @@ export class CityDriveEngine {
     handbrake: false,
     gyroSteer: 0,
   };
+  private static readonly IDLE_RPM = 800;
+  private static readonly REDLINE_RPM = 7000;
+  private static readonly GEAR_SPEED_CAPS: Record<'1' | '2' | '3' | '4' | '5' | '6', number> = {
+    '1': 0.25,
+    '2': 0.4,
+    '3': 0.6,
+    '4': 0.78,
+    '5': 0.9,
+    '6': 1.0,
+  };
+  private static readonly GEAR_ACCEL_MULT: Record<'1' | '2' | '3' | '4' | '5' | '6', number> = {
+    '1': 1.65,
+    '2': 1.35,
+    '3': 1.12,
+    '4': 0.92,
+    '5': 0.78,
+    '6': 0.65,
+  };
+
   private gear: GearMode = 'D';
+  private isManualGear = false;
+  private rpm = CityDriveEngine.IDLE_RPM;
   private carHealth = 100;
   private repairing = false;
   private repairProgress = 0;
@@ -288,6 +332,8 @@ export class CityDriveEngine {
   private readonly repairSeconds = 2.5;
   private carX = 0;
   private carZ = 0;
+  private lastFreeCarX = 0;
+  private lastFreeCarZ = 0;
   private carSpeed = 0;
   private carHeading = 0;
   private steerAngle = 0;
@@ -448,6 +494,24 @@ export class CityDriveEngine {
     this.tick();
   }
 
+  private getMaxForwardGear(): number {
+    return this.activeVehicleKind === 'sports' ? 6 : 5;
+  }
+
+  private getManualGearSequence(): GearMode[] {
+    return this.getMaxForwardGear() === 6
+      ? ['R', 'N', '1', '2', '3', '4', '5', '6']
+      : ['R', 'N', '1', '2', '3', '4', '5'];
+  }
+
+  private syncDriverVisibility(): void {
+    const isDriverView = this.playerMode === 'driving' && this.activePreset === 'driver';
+    this.car.group.visible = !(isDriverView && this.activeVehicleId === PLAYER_BLUE_SPORTS_ID);
+    if (this.activeVehicleId !== PLAYER_BLUE_SPORTS_ID) {
+      this.traffic.setVehicleVisible(this.activeVehicleId, !isDriverView);
+    }
+  }
+
   public setCameraPreset(preset: CameraPreset): void {
     this.activePreset = preset;
     const p = CAMERA_PRESETS[preset];
@@ -457,6 +521,7 @@ export class CityDriveEngine {
       preset === 'chase' ? VEHICLE_HANDLING[this.activeVehicleKind].cameraDistance : p.distance;
     this.targetCam.lookZOffset = p.lookZOffset;
     this.targetCam.lookYOffset = p.lookYOffset;
+    this.syncDriverVisibility();
   }
 
   public setCameraSensitivity(sens: number): void {
@@ -502,6 +567,68 @@ export class CityDriveEngine {
 
   public setGear(gear: GearMode): void {
     this.gear = gear;
+    this.lastTelemetryTime = -10;
+  }
+
+  public setManualGearMode(enabled: boolean): void {
+    this.isManualGear = enabled;
+    if (enabled) {
+      if (this.gear === 'P') {
+        this.gear = 'N';
+      } else if (this.gear === 'D') {
+        const spec = VEHICLE_HANDLING[this.activeVehicleKind];
+        const powerFactor = 0.35 + 0.65 * (this.carHealth / 100);
+        const normalMaxFwd = spec.maxFwdSpeed * powerFactor;
+        const maxGear = this.getMaxForwardGear();
+        let chosen: GearMode = '1';
+        for (let g = 1; g <= maxGear; g++) {
+          const key = String(g) as '1' | '2' | '3' | '4' | '5' | '6';
+          chosen = key;
+          if (this.carSpeed <= normalMaxFwd * CityDriveEngine.GEAR_SPEED_CAPS[key]) {
+            break;
+          }
+        }
+        this.gear = this.carSpeed > 0.5 ? chosen : '1';
+      }
+    } else if (this.gear !== 'P' && this.gear !== 'R' && this.gear !== 'N') {
+      this.gear = 'D';
+    }
+    this.lastTelemetryTime = -10;
+  }
+
+  public shiftGear(delta: 1 | -1): void {
+    if (!this.isManualGear || this.playerMode !== 'driving') return;
+    const seq = this.getManualGearSequence();
+    let idx = seq.indexOf(this.gear);
+    if (idx === -1) idx = seq.indexOf('1');
+    const nextIdx = idx + delta;
+    if (nextIdx < 0 || nextIdx >= seq.length) return;
+
+    const nextGear = seq[nextIdx];
+    if (
+      delta < 0 &&
+      (nextGear === '1' ||
+        nextGear === '2' ||
+        nextGear === '3' ||
+        nextGear === '4' ||
+        nextGear === '5' ||
+        nextGear === '6')
+    ) {
+      const spec = VEHICLE_HANDLING[this.activeVehicleKind];
+      const powerFactor = 0.35 + 0.65 * (this.carHealth / 100);
+      const normalMaxFwd = spec.maxFwdSpeed * powerFactor;
+      const targetCap = normalMaxFwd * CityDriveEngine.GEAR_SPEED_CAPS[nextGear];
+      const projectedRpm =
+        CityDriveEngine.IDLE_RPM +
+        (Math.max(0, this.carSpeed) / Math.max(targetCap, 0.01)) *
+          (CityDriveEngine.REDLINE_RPM - CityDriveEngine.IDLE_RPM);
+      if (projectedRpm > CityDriveEngine.REDLINE_RPM) {
+        return;
+      }
+    }
+
+    this.gear = nextGear;
+    this.lastTelemetryTime = -10;
   }
 
   public setTimeMode(mode: TimeMode): void {
@@ -531,10 +658,12 @@ export class CityDriveEngine {
     this.repairProgress = 0;
     this.carSpeed = 0;
 
-    // Leave active vehicle parked safely in the world
+    // Leave active vehicle parked safely in the world & restore visibility if in driver view
+    this.car.group.visible = true;
     if (this.activeVehicleId === PLAYER_BLUE_SPORTS_ID) {
       this.sportsCarPos = { x: this.carX, z: this.carZ, heading: this.carHeading };
     } else {
+      this.traffic.setVehicleVisible(this.activeVehicleId, true);
       this.traffic.releaseVehicle(this.activeVehicleId, this.carX, this.carZ, this.carHeading);
     }
 
@@ -698,16 +827,24 @@ export class CityDriveEngine {
 
   private updateDriving(elapsed: number, dt: number): void {
     this.damageCooldown = Math.max(0, this.damageCooldown - dt);
+    if (!isObstacleOrWaterBlocked(this.carX, this.carZ, 1.3)) {
+      this.lastFreeCarX = this.carX;
+      this.lastFreeCarZ = this.carZ;
+    }
+
     const spec = VEHICLE_HANDLING[this.activeVehicleKind];
     const powerFactor = 0.35 + 0.65 * (this.carHealth / 100);
-    const MAX_FWD_SPEED = spec.maxFwdSpeed * powerFactor;
-    const MAX_REV_SPEED = spec.maxRevSpeed;
+    const NORMAL_MAX_FWD = spec.maxFwdSpeed * powerFactor;
+    const onRoad = isOnPavedRoad(this.carX, this.carZ);
+    const offRoadCapFactor = onRoad ? 1.0 : 0.45;
+    const MAX_FWD_SPEED = NORMAL_MAX_FWD * offRoadCapFactor;
+    const MAX_REV_SPEED = spec.maxRevSpeed * offRoadCapFactor;
     const ACCEL_RATE = spec.accelRate * powerFactor;
     const BRAKE_RATE = spec.brakeRate;
     const HANDBRAKE_RATE = 38.0;
     const REVERSE_RATE = 9.5;
     const wetGrip = 1 - this.rainFactor * 0.25;
-    const COAST_DECEL = 6.2 * wetGrip;
+    const COAST_DECEL = (6.2 + (onRoad ? 0 : 2.1)) * wetGrip;
     const MAX_STEER = 0.42;
 
     const { accelerate, reverse, steerLeft, steerRight, handbrake, gyroSteer, steerAnalog } =
@@ -715,6 +852,8 @@ export class CityDriveEngine {
     let isBraking = false;
     this.hitPoliceThisStep = false;
     this.hitPedestrianThisStep = false;
+
+    let targetRpm = CityDriveEngine.IDLE_RPM;
 
     if (handbrake) {
       if (Math.abs(this.carSpeed) <= HANDBRAKE_RATE * dt) {
@@ -743,6 +882,9 @@ export class CityDriveEngine {
       } else {
         this.carSpeed -= Math.sign(this.carSpeed) * COAST_DECEL * dt;
       }
+      if (accelerate) {
+        targetRpm = 6600;
+      }
     } else if (this.gear === 'R') {
       if (accelerate && !reverse) {
         if (this.carSpeed > 0.1) {
@@ -764,13 +906,77 @@ export class CityDriveEngine {
       } else {
         this.carSpeed -= Math.sign(this.carSpeed) * COAST_DECEL * dt;
       }
-    } else {
+      const revNorm = THREE.MathUtils.clamp(
+        Math.abs(this.carSpeed) / Math.max(Math.abs(spec.maxRevSpeed), 0.1),
+        0,
+        1
+      );
+      targetRpm =
+        CityDriveEngine.IDLE_RPM +
+        revNorm * (6400 - CityDriveEngine.IDLE_RPM) +
+        (accelerate ? 350 : 0);
+    } else if (
+      this.isManualGear &&
+      (this.gear === '1' ||
+        this.gear === '2' ||
+        this.gear === '3' ||
+        this.gear === '4' ||
+        this.gear === '5' ||
+        this.gear === '6')
+    ) {
+      const ratio = CityDriveEngine.GEAR_SPEED_CAPS[this.gear];
+      const accelMult = CityDriveEngine.GEAR_ACCEL_MULT[this.gear];
+      const gearMaxSpeed = NORMAL_MAX_FWD * ratio;
+      const effectiveCap = Math.min(gearMaxSpeed, MAX_FWD_SPEED);
+      const gearAccel = ACCEL_RATE * accelMult;
+
+      const rawWheelRpm =
+        CityDriveEngine.IDLE_RPM +
+        (Math.max(0, this.carSpeed) / Math.max(gearMaxSpeed, 0.01)) *
+          (CityDriveEngine.REDLINE_RPM - CityDriveEngine.IDLE_RPM);
+      const atRevLimiter = rawWheelRpm >= CityDriveEngine.REDLINE_RPM;
+
       if (accelerate && !reverse) {
         if (this.carSpeed < 0) {
           this.carSpeed = Math.min(0, this.carSpeed + BRAKE_RATE * dt);
           isBraking = true;
+        } else if (!atRevLimiter && this.carSpeed < effectiveCap) {
+          this.carSpeed = Math.min(effectiveCap, this.carSpeed + gearAccel * dt);
+        } else if (this.carSpeed > effectiveCap) {
+          this.carSpeed = Math.max(effectiveCap, this.carSpeed - 12.0 * dt);
+        }
+      } else if (reverse && !accelerate) {
+        if (Math.abs(this.carSpeed) <= BRAKE_RATE * dt) {
+          this.carSpeed = 0;
         } else {
+          this.carSpeed -= Math.sign(this.carSpeed) * BRAKE_RATE * dt;
+        }
+        isBraking = true;
+      } else {
+        if (Math.abs(this.carSpeed) <= COAST_DECEL * dt) {
+          this.carSpeed = 0;
+        } else {
+          this.carSpeed -= Math.sign(this.carSpeed) * COAST_DECEL * dt;
+        }
+      }
+
+      targetRpm = THREE.MathUtils.clamp(
+        CityDriveEngine.IDLE_RPM +
+          (Math.max(0, this.carSpeed) / Math.max(gearMaxSpeed, 0.01)) *
+            (CityDriveEngine.REDLINE_RPM - CityDriveEngine.IDLE_RPM),
+        CityDriveEngine.IDLE_RPM,
+        CityDriveEngine.REDLINE_RPM
+      );
+    } else {
+      // Automatic 'D' mode (preserved unchanged + off-road top speed limit)
+      if (accelerate && !reverse) {
+        if (this.carSpeed < 0) {
+          this.carSpeed = Math.min(0, this.carSpeed + BRAKE_RATE * dt);
+          isBraking = true;
+        } else if (this.carSpeed <= MAX_FWD_SPEED) {
           this.carSpeed = Math.min(MAX_FWD_SPEED, this.carSpeed + ACCEL_RATE * dt);
+        } else {
+          this.carSpeed = Math.max(MAX_FWD_SPEED, this.carSpeed - 12.0 * dt);
         }
       } else if (reverse && !accelerate) {
         if (this.carSpeed > 0.1) {
@@ -787,7 +993,48 @@ export class CityDriveEngine {
           this.carSpeed -= Math.sign(this.carSpeed) * COAST_DECEL * dt;
         }
       }
+
+      // Smooth simulated automatic gearbox RPM progression
+      const maxGear = this.getMaxForwardGear();
+      let prevCap = 0;
+      let autoRatio = 1.0;
+      const spdNorm = Math.max(0, this.carSpeed) / Math.max(NORMAL_MAX_FWD, 0.1);
+      for (let g = 1; g <= maxGear; g++) {
+        const key = String(g) as '1' | '2' | '3' | '4' | '5' | '6';
+        const cap = CityDriveEngine.GEAR_SPEED_CAPS[key];
+        if (spdNorm <= cap || g === maxGear) {
+          const span = Math.max(cap - prevCap * 0.65, 0.05);
+          autoRatio = THREE.MathUtils.clamp((spdNorm - prevCap * 0.65) / span, 0, 1);
+          break;
+        }
+        prevCap = cap;
+      }
+      targetRpm =
+        this.carSpeed < -0.1
+          ? CityDriveEngine.IDLE_RPM +
+            (Math.abs(this.carSpeed) / Math.max(Math.abs(spec.maxRevSpeed), 0.1)) *
+              (5800 - CityDriveEngine.IDLE_RPM)
+          : CityDriveEngine.IDLE_RPM +
+            autoRatio * (6600 - CityDriveEngine.IDLE_RPM) +
+            (accelerate && this.carSpeed >= 0 ? 250 : 0);
     }
+
+    // Small off-road drag + ensure off-road top speed cap is enforced smoothly
+    if (!onRoad) {
+      this.carSpeed *= Math.max(0, 1 - 1.45 * dt);
+      if (this.carSpeed > MAX_FWD_SPEED) {
+        this.carSpeed = Math.max(MAX_FWD_SPEED, this.carSpeed - 14.0 * dt);
+      } else if (this.carSpeed < MAX_REV_SPEED) {
+        this.carSpeed = Math.min(MAX_REV_SPEED, this.carSpeed + 14.0 * dt);
+      }
+    }
+
+    this.rpm = THREE.MathUtils.damp(
+      this.rpm,
+      THREE.MathUtils.clamp(targetRpm, CityDriveEngine.IDLE_RPM, CityDriveEngine.REDLINE_RPM),
+      14,
+      dt
+    );
 
     const buttonSteer = (steerLeft ? 1 : 0) - (steerRight ? 1 : 0);
     const combinedSteer = THREE.MathUtils.clamp(
@@ -823,7 +1070,7 @@ export class CityDriveEngine {
       roadResolved.speed,
       this.activeVehicleId
     );
-    let collidedThisStep = false;
+    let collidedThisStep = roadResolved.blocked;
     if (trafficResolved.speed < roadResolved.speed * 0.85) {
       collidedThisStep = true;
     }
@@ -853,9 +1100,21 @@ export class CityDriveEngine {
       }
     }
 
-    this.carX = policeResolved.x;
-    this.carZ = policeResolved.z;
-    this.carSpeed = policeResolved.speed;
+    nextX = policeResolved.x;
+    nextZ = policeResolved.z;
+    nextSpeed = policeResolved.speed;
+
+    // Anti-stuck safeguard: if pushed into a building or water, revert to last free position
+    if (isObstacleOrWaterBlocked(nextX, nextZ, 1.2)) {
+      nextX = this.lastFreeCarX;
+      nextZ = this.lastFreeCarZ;
+      nextSpeed = 0;
+      collidedThisStep = true;
+    }
+
+    this.carX = nextX;
+    this.carZ = nextZ;
+    this.carSpeed = nextSpeed;
 
     if (speedBefore * 3.6 > 15 && this.pedestrians.checkVehicleCollision(this.carX, this.carZ, 1.8)) {
       this.hitPedestrianThisStep = true;
@@ -876,14 +1135,17 @@ export class CityDriveEngine {
 
     const nextY = groundHeightAt(this.carX, this.carZ);
     const pitch = groundPitchAt(this.carX, this.carZ, this.carHeading);
+    const isDriverView = this.activePreset === 'driver';
 
     if (this.activeVehicleId === PLAYER_BLUE_SPORTS_ID) {
       this.sportsCarPos = { x: this.carX, z: this.carZ, heading: this.carHeading };
+      this.car.group.visible = !isDriverView;
       this.car.group.position.set(this.carX, nextY, this.carZ);
       this.car.group.rotation.set(pitch, this.carHeading, 0, 'YXZ');
       this.car.updateDrive(elapsed, this.carSpeed, this.steerAngle, isBraking, dt);
       this.playerChar.group.visible = false;
     } else {
+      this.traffic.setVehicleVisible(this.activeVehicleId, !isDriverView);
       this.traffic.updateClaimedVehicle(
         this.activeVehicleId,
         this.carX,
@@ -895,13 +1157,13 @@ export class CityDriveEngine {
         dt,
         this.steerAngle
       );
-      // Show detailed skeletal player character seated visibly on Motorcycle or Open-Cab Tractor!
-      if (this.activeVehicleKind === 'motorcycle') {
+      // Show detailed skeletal player character seated visibly on Motorcycle or Open-Cab Tractor (unless in Driver view)
+      if (!isDriverView && this.activeVehicleKind === 'motorcycle') {
         this.playerChar.group.visible = true;
         this.playerChar.group.position.set(this.carX, nextY + 0.34, this.carZ);
         this.playerChar.group.rotation.set(pitch - 0.14, this.carHeading, 0, 'YXZ');
         this.playerChar.update(elapsed, dt, 0, false, 0, false, 'sit_moto', this.steerAngle * 2.2);
-      } else if (this.activeVehicleKind === 'tractor') {
+      } else if (!isDriverView && this.activeVehicleKind === 'tractor') {
         const seatRearOffset = 0.68;
         const sx = this.carX + Math.sin(this.carHeading) * seatRearOffset;
         const sz = this.carZ + Math.cos(this.carHeading) * seatRearOffset;
@@ -1021,11 +1283,14 @@ export class CityDriveEngine {
         this.activeVehicleLabel = target.label;
         this.carX = target.x;
         this.carZ = target.z;
+        this.lastFreeCarX = target.x;
+        this.lastFreeCarZ = target.z;
         this.carHeading = target.yaw;
         this.camHeading = target.yaw;
         this.carSpeed = 0;
+        this.rpm = CityDriveEngine.IDLE_RPM;
         this.steerAngle = 0;
-        this.gear = 'D';
+        this.gear = this.isManualGear ? '1' : 'D';
         this.nearbyVehicle = null;
         this.playerMode = 'driving';
         this.setCameraPreset(this.activePreset);
@@ -1128,7 +1393,7 @@ export class CityDriveEngine {
     this.weather.update(pos.x, pos.y, pos.z, dt, this.rainFactor);
   }
 
-  private updateCamera(dt: number): void {
+  private updateCamera(elapsed: number, dt: number): void {
     if (this.playerMode === 'walking' || this.playerMode === 'exiting' || this.playerMode === 'arrested') {
       const dist = 4.6;
       const horiz = Math.cos(this.walkCamPitch) * dist;
@@ -1146,6 +1411,37 @@ export class CityDriveEngine {
 
       if (Math.abs(this.camera.fov - 58) > 0.05) {
         this.camera.fov = THREE.MathUtils.damp(this.camera.fov, 58, 6, dt);
+        this.camera.updateProjectionMatrix();
+      }
+      return;
+    }
+
+    if (this.playerMode === 'driving' && this.activePreset === 'driver') {
+      const seat = DRIVER_SEAT_OFFSETS[this.activeVehicleKind];
+      const cy = groundHeightAt(this.carX, this.carZ);
+      const pitch = groundPitchAt(this.carX, this.carZ, this.carHeading);
+      const fwdX = -Math.sin(this.carHeading);
+      const fwdZ = -Math.cos(this.carHeading);
+      const rightX = Math.cos(this.carHeading);
+      const rightZ = -Math.sin(this.carHeading);
+
+      const speedBump =
+        Math.sin(elapsed * 19) * 0.006 * Math.min(1, Math.abs(this.carSpeed) / 14);
+      const seatX = this.carX + rightX * seat.side + fwdX * seat.fwd;
+      const seatY = cy + seat.height + Math.sin(pitch) * seat.fwd + speedBump;
+      const seatZ = this.carZ + rightZ * seat.side + fwdZ * seat.fwd;
+
+      this.camera.position.set(seatX, seatY, seatZ);
+      _lookTargetPos.set(
+        seatX + fwdX * 24,
+        seatY + Math.sin(pitch) * 24 - 0.35,
+        seatZ + fwdZ * 24
+      );
+      this.camera.lookAt(_lookTargetPos);
+
+      const targetFov = 64 + (Math.abs(this.carSpeed) / 28.0) * 5.0;
+      if (Math.abs(this.camera.fov - targetFov) > 0.02) {
+        this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 5.5, dt);
         this.camera.updateProjectionMatrix();
       }
       return;
@@ -1295,9 +1591,11 @@ export class CityDriveEngine {
       this.repairProgress = 0;
       if (this.playerMode === 'driving') {
         this.carSpeed = 0;
+        this.car.group.visible = true;
         if (this.activeVehicleId === PLAYER_BLUE_SPORTS_ID) {
           this.sportsCarPos = { x: this.carX, z: this.carZ, heading: this.carHeading };
         } else {
+          this.traffic.setVehicleVisible(this.activeVehicleId, true);
           this.traffic.releaseVehicle(this.activeVehicleId, this.carX, this.carZ, this.carHeading);
         }
         const leftX = -Math.cos(this.carHeading);
@@ -1315,14 +1613,18 @@ export class CityDriveEngine {
       this.walkSpeed = 0;
     }
 
-    const activeSpec = VEHICLE_HANDLING[this.activeVehicleKind];
-    const engineLoad = Math.abs(this.carSpeed) / activeSpec.maxFwdSpeed;
+    const engineLoad = THREE.MathUtils.clamp(
+      (this.rpm - CityDriveEngine.IDLE_RPM) /
+        (CityDriveEngine.REDLINE_RPM - CityDriveEngine.IDLE_RPM),
+      0,
+      1
+    );
     cityAudio.setEngine(this.playerMode === 'driving', engineLoad);
     cityAudio.setSiren(policeResult.hudState.status === 'pursuit');
 
     this.pedestrians.update(elapsed, dt);
     this.city.update(elapsed);
-    this.updateCamera(dt);
+    this.updateCamera(elapsed, dt);
 
     if (elapsed - this.lastTelemetryTime > 0.1) {
       this.lastTelemetryTime = elapsed;
@@ -1334,6 +1636,10 @@ export class CityDriveEngine {
           Math.abs(this.playerMode === 'driving' ? this.carSpeed : this.walkSpeed) * 3.6
         ),
         gear: this.gear,
+        isManualGear: this.isManualGear,
+        rpm: Math.round(this.rpm),
+        maxForwardGear: this.getMaxForwardGear(),
+        steerAngle: this.steerAngle,
         carHealth: Math.round(this.carHealth),
         repairing: this.repairing,
         repairProgress: this.repairProgress,

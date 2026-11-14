@@ -45,6 +45,7 @@ const CAMERA_OPTIONS: { id: CameraPreset; label: string }[] = [
   { id: 'low', label: 'Low' },
   { id: 'side', label: 'Side' },
   { id: 'wide', label: 'Wide' },
+  { id: 'driver', label: 'Driver' },
 ];
 
 const GEAR_OPTIONS: GearMode[] = ['P', 'R', 'N', 'D'];
@@ -67,6 +68,10 @@ const INITIAL_TELEMETRY: HudTelemetry = {
   activeVehicleLabel: 'Blue Sports Car',
   speedKmh: 0,
   gear: 'D',
+  isManualGear: false,
+  rpm: 800,
+  maxForwardGear: 6,
+  steerAngle: 0,
   carHealth: 100,
   repairing: false,
   repairProgress: 0,
@@ -154,7 +159,6 @@ export default function App() {
 
   const [activePreset, setActivePreset] = useState<CameraPreset>('chase');
   const [headlightsOn, setHeadlightsOn] = useState(true);
-  const [gear, setGear] = useState<GearMode>('D');
   const [timeMode, setTimeMode] = useState<TimeMode>('auto');
   const [weatherMode, setWeatherMode] = useState<WeatherMode>('clear');
   const [hornActive, setHornActive] = useState(false);
@@ -619,6 +623,7 @@ export default function App() {
     } catch {
       // Ignore orientation lock failures
     }
+    setIsTouchPortrait(false);
   };
 
   const handleSavePrefs = (next: ControlPreferences) => {
@@ -638,8 +643,15 @@ export default function App() {
   };
 
   const handleSelectGear = (nextGear: GearMode) => {
-    setGear(nextGear);
     engineRef.current?.setGear(nextGear);
+  };
+
+  const handleToggleManualGear = () => {
+    engineRef.current?.setManualGearMode(!telemetry.isManualGear);
+  };
+
+  const handleShiftGear = (delta: 1 | -1) => {
+    engineRef.current?.shiftGear(delta);
   };
 
   const handleCycleTime = () => {
@@ -707,6 +719,8 @@ export default function App() {
 
   const isWalkingHud = mode === 'walking' || mode === 'entering' || mode === 'exiting';
   const isDrivingHud = mode === 'driving';
+  const currentGear = telemetry.gear;
+  const rpmPct = Math.max(0, Math.min(100, ((telemetry.rpm - 800) / (7000 - 800)) * 100));
 
   return (
     <div className="relative w-screen h-[100dvh] overflow-hidden bg-sky-900 select-none">
@@ -769,9 +783,27 @@ export default function App() {
               <>
                 <span className="font-mono font-bold text-sky-300">{speedKmh}</span>
                 <span className="text-[10px] text-slate-300">km/h</span>
-                <span className="rounded bg-sky-500/20 border border-sky-400/40 px-1 text-[10px] font-bold text-sky-200">
-                  {gear}
-                </span>
+                <div className="flex items-center gap-1 rounded bg-sky-500/20 border border-sky-400/40 px-1.5 py-0.5">
+                  <span className="text-[9px] font-bold text-amber-300">
+                    {telemetry.isManualGear ? 'M' : 'A'}
+                  </span>
+                  <span className="text-[10px] font-bold text-sky-200">{currentGear}</span>
+                  <div
+                    aria-label="Engine RPM"
+                    className="w-10 h-1.5 rounded-full bg-slate-800 overflow-hidden border border-white/10"
+                  >
+                    <div
+                      style={{ width: `${rpmPct}%` }}
+                      className={`h-full transition-all duration-75 ${
+                        rpmPct > 86
+                          ? 'bg-rose-500'
+                          : rpmPct > 65
+                            ? 'bg-amber-400'
+                            : 'bg-emerald-400'
+                      }`}
+                    />
+                  </div>
+                </div>
                 <span className="hidden sm:inline text-[10px] text-slate-300 border-l border-white/15 pl-1.5">
                   {activeVehicleLabel}
                 </span>
@@ -921,13 +953,22 @@ export default function App() {
           <p className="max-w-xs text-sm text-slate-300">
             City Drive is played in landscape with both thumbs. Rotate your phone to start.
           </p>
-          <button
-            type="button"
-            onClick={handleTryFullscreenLandscape}
-            className="rounded-xl bg-sky-500 px-5 py-2.5 text-sm font-bold text-slate-950 hover:bg-sky-400 transition-colors cursor-pointer shadow-lg"
-          >
-            Try Fullscreen Landscape
-          </button>
+          <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xs">
+            <button
+              type="button"
+              onClick={handleTryFullscreenLandscape}
+              className="flex-1 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-bold text-slate-950 hover:bg-sky-400 transition-colors cursor-pointer shadow-lg"
+            >
+              Try Fullscreen
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsTouchPortrait(false)}
+              className="flex-1 rounded-xl bg-slate-800 border border-white/20 px-4 py-2.5 text-sm font-bold text-white hover:bg-slate-700 transition-colors cursor-pointer"
+            >
+              Play Now
+            </button>
+          </div>
         </div>
       )}
 
@@ -996,19 +1037,67 @@ export default function App() {
         </div>
       )}
 
+      {/* Simple Driver View Dashboard & Steering Wheel Overlay */}
+      {isDrivingHud && activePreset === 'driver' && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center overflow-hidden"
+        >
+          <svg
+            viewBox="0 0 1200 160"
+            preserveAspectRatio="none"
+            className="w-full h-24 sm:h-28 md:h-32"
+          >
+            <path
+              d="M0,160 L0,88 Q600,12 1200,88 L1200,160 Z"
+              fill="rgba(10, 15, 28, 0.92)"
+            />
+            <path
+              d="M0,88 Q600,12 1200,88"
+              fill="none"
+              stroke="rgba(148, 163, 184, 0.28)"
+              strokeWidth="3"
+            />
+            <path
+              d="M440,68 Q600,20 760,68"
+              fill="none"
+              stroke="rgba(56, 189, 248, 0.28)"
+              strokeWidth="2.5"
+            />
+          </svg>
+
+          <div className="absolute bottom-[-22px] sm:bottom-[-18px] left-1/2 -translate-x-1/2">
+            <svg
+              viewBox="0 0 180 180"
+              style={{ transform: `rotate(${(-telemetry.steerAngle * 145).toFixed(1)}deg)` }}
+              className="w-36 h-36 sm:w-44 sm:h-44 opacity-90 drop-shadow-[0_4px_16px_rgba(0,0,0,0.75)]"
+            >
+              <circle cx="90" cy="90" r="72" fill="none" stroke="#1e293b" strokeWidth="14" />
+              <circle cx="90" cy="90" r="72" fill="none" stroke="#475569" strokeWidth="2.5" />
+              <line x1="90" y1="90" x2="22" y2="82" stroke="#334155" strokeWidth="11" strokeLinecap="round" />
+              <line x1="90" y1="90" x2="158" y2="82" stroke="#334155" strokeWidth="11" strokeLinecap="round" />
+              <line x1="90" y1="90" x2="90" y2="158" stroke="#334155" strokeWidth="12" strokeLinecap="round" />
+              <rect x="85" y="12" width="10" height="12" rx="3" fill="#38bdf8" />
+              <circle cx="90" cy="90" r="22" fill="#0f172a" stroke="#475569" strokeWidth="3" />
+              <circle cx="90" cy="90" r="7" fill="#38bdf8" opacity="0.8" />
+            </svg>
+          </div>
+        </div>
+      )}
+
       {/* ============================================================
           DUAL-THUMB DRIVING CONTROLS HUD
           ============================================================ */}
       {isDrivingHud && (
         <>
-          {/* Left-Thumb Steering Pad (Virtual Analog Stick or Optional L/R Tap Buttons) */}
+          {/* Left-Thumb Steering Pad (Virtual Analog Stick, L/R Buttons, or 150px Steering Wheel) */}
           <div
             style={moveSideStyle}
-            className={`pointer-events-auto absolute bottom-4 sm:bottom-5 z-20 flex flex-col gap-2 touch-none select-none ${
-              isMirrored ? 'right-4 sm:right-5 items-end' : 'left-4 sm:left-5 items-start'
+            className={`pointer-events-auto absolute bottom-3 sm:bottom-5 z-20 flex flex-col gap-1.5 sm:gap-2 touch-none select-none ${
+              isMirrored ? 'right-3 sm:right-5 items-end' : 'left-3 sm:left-5 items-start'
             }`}
           >
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1 sm:gap-1.5">
               <button
                 type="button"
                 onClick={() => {
@@ -1018,7 +1107,7 @@ export default function App() {
                     prev === 'stick' ? 'buttons' : prev === 'buttons' ? 'wheel' : 'stick'
                   );
                 }}
-                className={`rounded-lg border px-2 py-1 text-[10px] font-semibold cursor-pointer ${
+                className={`rounded-lg border px-1.5 sm:px-2 py-1 text-[10px] font-semibold cursor-pointer whitespace-nowrap ${
                   steerMode !== 'buttons'
                     ? 'bg-sky-500/25 border-sky-400/60 text-sky-200'
                     : 'bg-slate-950/85 border-white/15 text-slate-200 hover:text-white'
@@ -1030,13 +1119,13 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setGyroPanelOpen((p) => !p)}
-                className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold cursor-pointer ${
+                className={`flex items-center gap-1 rounded-lg border px-1.5 sm:px-2 py-1 text-[10px] font-semibold cursor-pointer whitespace-nowrap ${
                   gyroEnabled
                     ? 'bg-emerald-500/25 border-emerald-400/60 text-emerald-200'
                     : 'bg-slate-950/85 border-white/15 text-slate-200 hover:text-white'
                 }`}
               >
-                <SlidersHorizontal className="w-3 h-3" />
+                <SlidersHorizontal className="w-3 h-3 shrink-0" />
                 <span>Gyro {gyroEnabled ? 'On' : 'Off'}</span>
               </button>
 
@@ -1058,13 +1147,13 @@ export default function App() {
                   setHornActive(false);
                   engineRef.current?.setHornActive(false);
                 }}
-                className={`flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-semibold cursor-pointer touch-none ${
+                className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold cursor-pointer touch-none whitespace-nowrap ${
                   hornActive
                     ? 'bg-amber-400 text-slate-950 border-amber-200 scale-95'
                     : 'bg-slate-950/85 border-white/15 text-amber-200 hover:bg-slate-900'
                 }`}
               >
-                <Volume2 className="w-3 h-3" />
+                <Volume2 className="w-3 h-3 shrink-0" />
                 <span>Horn</span>
               </button>
             </div>
@@ -1190,71 +1279,71 @@ export default function App() {
                     }
                   }}
                   onLostPointerCapture={resetWheel}
-                  className="relative w-[140px] h-[140px] rounded-full flex items-center justify-center touch-none cursor-grab active:cursor-grabbing select-none"
+                  className="relative w-[150px] h-[150px] rounded-full flex items-center justify-center touch-none cursor-grab active:cursor-grabbing select-none"
                 >
                   <svg
-                    viewBox="0 0 140 140"
+                    viewBox="0 0 150 150"
                     style={{ transform: `rotate(${-wheelState.angleDeg}deg)` }}
-                    className={`w-[140px] h-[140px] pointer-events-none drop-shadow-xl ${
+                    className={`w-[150px] h-[150px] pointer-events-none drop-shadow-xl ${
                       wheelState.active ? '' : 'transition-transform duration-150 ease-out'
                     }`}
                   >
                     {/* Subtle translucent backing */}
                     <circle
-                      cx="70"
-                      cy="70"
-                      r="64"
+                      cx="75"
+                      cy="75"
+                      r="69"
                       fill="rgba(2, 6, 23, 0.55)"
                     />
                     {/* Three Spokes (Left, Right, Bottom) */}
                     <line
-                      x1="70"
-                      y1="70"
-                      x2="16"
-                      y2="64"
+                      x1="75"
+                      y1="75"
+                      x2="17"
+                      y2="68"
                       stroke="#cbd5e1"
                       strokeWidth="10"
                       strokeLinecap="round"
                     />
                     <line
-                      x1="70"
-                      y1="70"
-                      x2="124"
-                      y2="64"
+                      x1="75"
+                      y1="75"
+                      x2="133"
+                      y2="68"
                       stroke="#cbd5e1"
                       strokeWidth="10"
                       strokeLinecap="round"
                     />
                     <line
-                      x1="70"
-                      y1="70"
-                      x2="70"
-                      y2="124"
+                      x1="75"
+                      y1="75"
+                      x2="75"
+                      y2="133"
                       stroke="#cbd5e1"
                       strokeWidth="11"
                       strokeLinecap="round"
                     />
                     {/* Outer Steering Rim */}
                     <circle
-                      cx="70"
-                      cy="70"
-                      r="56"
+                      cx="75"
+                      cy="75"
+                      r="60"
                       fill="none"
                       stroke={wheelState.active ? '#38bdf8' : '#e2e8f0'}
                       strokeWidth="12"
                     />
                     <circle
-                      cx="70"
-                      cy="70"
-                      r="56"
+                      cx="75"
+                      cy="75"
+                      r="60"
                       fill="none"
                       stroke="#0f172a"
                       strokeWidth="3"
                     />
                     {/* Top 12-o'clock Center Stripe */}
                     <rect
-                      x="66"
-                      y="8"
+                      x="71"
+                      y="9"
                       width="8"
                       height="12"
                       rx="3"
@@ -1262,14 +1351,14 @@ export default function App() {
                     />
                     {/* Center Hub */}
                     <circle
-                      cx="70"
-                      cy="70"
-                      r="20"
+                      cx="75"
+                      cy="75"
+                      r="21"
                       fill="#1e293b"
                       stroke={wheelState.active ? '#38bdf8' : '#94a3b8'}
                       strokeWidth="3.5"
                     />
-                    <circle cx="70" cy="70" r="7" fill="#38bdf8" />
+                    <circle cx="75" cy="75" r="7" fill="#38bdf8" />
                   </svg>
                 </div>
                 <span className="text-[10px] font-semibold tracking-wide text-white/80 drop-shadow">
@@ -1279,58 +1368,111 @@ export default function App() {
             )}
           </div>
 
-          {/* Customizable Action Pad: EXIT VEHICLE + Gear Selector */}
+          {/* Customizable Action Pad: stacked above right-side pedals so no controls overlap on 360px or landscape phones */}
           <div
             style={actionPadStyle}
-            className={`pointer-events-auto absolute bottom-32 sm:bottom-36 z-20 flex items-center gap-2 touch-none select-none ${
-              isMirrored ? 'left-4 sm:left-5' : 'right-4 sm:right-5'
+            className={`pointer-events-auto absolute bottom-[106px] sm:bottom-[132px] z-20 flex flex-col gap-1.5 touch-none select-none ${
+              isMirrored ? 'left-3 sm:left-5 items-start' : 'right-3 sm:right-5 items-end'
             }`}
           >
-            <button
-              type="button"
-              onClick={() => {
-                clearAllInputs();
-                engineRef.current?.exitVehicle();
-              }}
-              aria-label="Exit Vehicle"
-              className="flex items-center gap-1.5 rounded-lg bg-amber-500/95 border border-amber-300 px-2.5 py-1.5 text-[11px] font-bold text-slate-950 shadow-lg hover:bg-amber-400 cursor-pointer"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>EXIT VEHICLE</span>
-            </button>
+            <div className="flex items-center gap-1 sm:gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  clearAllInputs();
+                  engineRef.current?.exitVehicle();
+                }}
+                aria-label="Exit Vehicle"
+                className="flex items-center gap-1 rounded-lg bg-amber-500/95 border border-amber-300 px-2 py-1 text-[10px] sm:text-[11px] font-bold text-slate-950 shadow-lg hover:bg-amber-400 cursor-pointer whitespace-nowrap"
+              >
+                <LogOut className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+                <span>EXIT VEHICLE</span>
+              </button>
 
-            <div
-              className="flex items-center gap-1 rounded-lg bg-slate-950/88 border border-white/15 p-0.5 shadow-lg"
-              role="group"
-              aria-label="Gear Selector"
-            >
-              {GEAR_OPTIONS.map((g) => (
+              <button
+                type="button"
+                onClick={handleToggleManualGear}
+                aria-pressed={telemetry.isManualGear}
+                className={`rounded-lg border px-2 py-1 text-[10px] sm:text-[11px] font-bold shadow-lg transition-colors cursor-pointer whitespace-nowrap ${
+                  telemetry.isManualGear
+                    ? 'bg-sky-500 text-slate-950 border-sky-300'
+                    : 'bg-slate-950/88 text-slate-200 border-white/15 hover:text-white hover:bg-slate-900'
+                }`}
+              >
+                Manual
+              </button>
+            </div>
+
+            {telemetry.isManualGear ? (
+              <div
+                className="flex items-center gap-0.5 sm:gap-1 rounded-lg bg-slate-950/88 border border-white/15 p-0.5 shadow-lg"
+                role="group"
+                aria-label="Manual Gear Selector"
+              >
                 <button
-                  key={g}
                   type="button"
-                  onClick={() => handleSelectGear(g)}
-                  aria-pressed={gear === g}
-                  className={`w-7 h-7 rounded-md text-xs font-bold transition-colors cursor-pointer ${
-                    gear === g
-                      ? g === 'R'
-                        ? 'bg-rose-500 text-white'
-                        : g === 'P'
-                          ? 'bg-amber-400 text-slate-950'
-                          : 'bg-sky-500 text-slate-950'
-                      : 'text-slate-300 hover:text-white hover:bg-white/10'
+                  onClick={() => handleShiftGear(-1)}
+                  aria-label="Shift Down"
+                  className="flex items-center gap-0.5 h-7 px-1.5 rounded-md text-[10px] sm:text-[11px] font-bold text-slate-100 hover:bg-white/10 active:scale-95 cursor-pointer whitespace-nowrap"
+                >
+                  <ChevronDown className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-sky-300 shrink-0" />
+                  <span>Shift Down</span>
+                </button>
+                <span
+                  className={`min-w-[24px] h-7 px-1.5 flex items-center justify-center rounded-md text-xs font-extrabold ${
+                    currentGear === 'R'
+                      ? 'bg-rose-500 text-white'
+                      : currentGear === 'N'
+                        ? 'bg-amber-400 text-slate-950'
+                        : 'bg-sky-500 text-slate-950'
                   }`}
                 >
-                  {g}
+                  {currentGear}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleShiftGear(1)}
+                  aria-label="Shift Up"
+                  className="flex items-center gap-0.5 h-7 px-1.5 rounded-md text-[10px] sm:text-[11px] font-bold text-slate-100 hover:bg-white/10 active:scale-95 cursor-pointer whitespace-nowrap"
+                >
+                  <span>Shift Up</span>
+                  <ChevronUp className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-emerald-300 shrink-0" />
                 </button>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div
+                className="flex items-center gap-1 rounded-lg bg-slate-950/88 border border-white/15 p-0.5 shadow-lg"
+                role="group"
+                aria-label="Gear Selector"
+              >
+                {GEAR_OPTIONS.map((g) => (
+                  <button
+                    key={g}
+                    type="button"
+                    onClick={() => handleSelectGear(g)}
+                    aria-pressed={currentGear === g}
+                    className={`w-7 h-7 rounded-md text-xs font-bold transition-colors cursor-pointer ${
+                      currentGear === g
+                        ? g === 'R'
+                          ? 'bg-rose-500 text-white'
+                          : g === 'P'
+                            ? 'bg-amber-400 text-slate-950'
+                            : 'bg-sky-500 text-slate-950'
+                        : 'text-slate-300 hover:text-white hover:bg-white/10'
+                    }`}
+                  >
+                    {g}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Right-Thumb Pedals Pad */}
           <div
             style={pedalsSideStyle}
-            className={`pointer-events-auto absolute bottom-4 sm:bottom-5 z-20 flex flex-col gap-1.5 touch-none select-none ${
-              isMirrored ? 'left-4 sm:left-5 items-start' : 'right-4 sm:right-5 items-end'
+            className={`pointer-events-auto absolute bottom-3 sm:bottom-5 z-20 flex flex-col gap-1.5 touch-none select-none ${
+              isMirrored ? 'left-3 sm:left-5 items-start' : 'right-3 sm:right-5 items-end'
             }`}
           >
             <div className="flex items-end gap-2">
@@ -1377,7 +1519,7 @@ export default function App() {
               >
                 <ArrowUp className="w-6 h-6" />
                 <span className="text-[10px] font-semibold mt-0.5">
-                  {gear === 'R' ? 'Rev' : 'Drive'}
+                  {currentGear === 'R' ? 'Rev' : 'Drive'}
                 </span>
               </button>
             </div>

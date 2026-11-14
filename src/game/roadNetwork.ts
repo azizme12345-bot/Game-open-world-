@@ -338,20 +338,187 @@ DRIVABLE_RECTS.push({
 });
 
 const ROUNDABOUTS = [ROUNDABOUT_CENTER, ROUNDABOUT_2_CENTER];
-const RB_DRIVABLE_INNER = ROUNDABOUT_INNER_R + 0.95; // 9.95m
-const RB_DRIVABLE_OUTER = ROUNDABOUT_OUTER_R - 0.95; // 21.05m
+
+// Exact paved road rectangles (using full ROAD_HALF_W) for off-road surface detection
+const PAVED_ROAD_RECTS: DrivableRect[] = RAW_SEGMENTS.map((raw) => {
+  const nodeA = NODE_MAP.get(raw.a)!;
+  const nodeB = NODE_MAP.get(raw.b)!;
+  return {
+    minX: Math.min(nodeA.x, nodeB.x) - ROAD_HALF_W,
+    maxX: Math.max(nodeA.x, nodeB.x) + ROAD_HALF_W,
+    minZ: Math.min(nodeA.z, nodeB.z) - ROAD_HALF_W,
+    maxZ: Math.max(nodeA.z, nodeB.z) + ROAD_HALF_W,
+  };
+});
+PAVED_ROAD_RECTS.push({
+  minX: 254,
+  maxX: 290,
+  minZ: -246,
+  maxZ: -138,
+});
+
+export function isOnPavedRoad(x: number, z: number): boolean {
+  for (let i = 0; i < ROUNDABOUTS.length; i++) {
+    const rb = ROUNDABOUTS[i];
+    const dist = Math.hypot(x - rb.x, z - rb.z);
+    if (dist <= ROUNDABOUT_OUTER_R + 0.5 && dist >= ROUNDABOUT_INNER_R - 0.5) {
+      return true;
+    }
+  }
+  for (let i = 0; i < PAVED_ROAD_RECTS.length; i++) {
+    const r = PAVED_ROAD_RECTS[i];
+    if (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Solid building footprints extracted directly from city.ts so parks, plazas, yards, and parking lots remain drivable
+function centeredBox(x: number, z: number, w: number, d: number): DrivableRect {
+  return {
+    minX: x - w * 0.5,
+    maxX: x + w * 0.5,
+    minZ: z - d * 0.5,
+    maxZ: z + d * 0.5,
+  };
+}
+
+export const BUILDING_OBSTACLES: DrivableRect[] = [
+  // Skyscrapers & Mid-Rise Towers (padded by +0.55 for ground podium)
+  centeredBox(-23.5, 22, 14.55, 18.55),
+  centeredBox(-24.5, -2, 16.55, 18.55),
+  centeredBox(-23.0, -26, 13.55, 16.55),
+  centeredBox(-72, 20, 14.55, 18.55),
+  centeredBox(-72, -18, 15.55, 20.55),
+  centeredBox(23.5, 22, 14.55, 18.55),
+  centeredBox(24.5, -2, 16.55, 18.55),
+  centeredBox(23.5, -26, 14.55, 16.55),
+  centeredBox(72, 18, 15.55, 20.55),
+  centeredBox(72, -20, 14.55, 18.55),
+  centeredBox(-168, -90, 16.55, 20.55),
+  centeredBox(-128, -120, 18.55, 14.55),
+  centeredBox(26, -184, 16.55, 18.55),
+  centeredBox(72, -176, 16.55, 20.55),
+  centeredBox(68, -214, 18.55, 16.55),
+  centeredBox(32, -216, 16.55, 16.55),
+  centeredBox(116, 22, 14.55, 18.55),
+  centeredBox(116, -20, 14.55, 20.55),
+  centeredBox(116, -96, 14.55, 24.55),
+  centeredBox(116, -192, 14.55, 24.55),
+
+  // Grand Shopping Mall & Atrium (mall parking lot stays open!)
+  centeredBox(48, -78, 54, 24),
+  centeredBox(48, -78, 22, 26.2),
+
+  // Civic District (Hospital, Police HQ, Fire Station)
+  centeredBox(-26, -180, 22, 26),
+  centeredBox(-70, -180, 20, 22),
+  centeredBox(-50, -216, 30, 16),
+
+  // Service District (Gas Station Store & Parking Garage)
+  centeredBox(-136, -176, 8, 14),
+  centeredBox(-160, -210, 32, 24),
+
+  // 10 Urban Residential Houses
+  centeredBox(-122, 22, 10.2, 10.2),
+  centeredBox(-122, 0, 10.2, 10.2),
+  centeredBox(-122, -22, 10.2, 10.2),
+  centeredBox(-158, 22, 10.2, 10.2),
+  centeredBox(-158, 0, 10.2, 10.2),
+  centeredBox(-158, -22, 10.2, 10.2),
+  centeredBox(-124, -74, 10.2, 10.2),
+  centeredBox(-124, -104, 10.2, 10.2),
+  centeredBox(-158, -74, 10.2, 10.2),
+  centeredBox(-158, -108, 10.2, 10.2),
+
+  // Airport Terminal & ATC Tower
+  centeredBox(222, -192, 22, 58),
+  centeredBox(222, -154, 7.2, 7.2),
+
+  // Harbor Express Tunnel Side Walls
+  centeredBox(RIVER_CENTER_X, 48 - ROAD_HALF_W - 0.6, 58, 1.2),
+  centeredBox(RIVER_CENTER_X, 48 + ROAD_HALF_W + 0.6, 58, 1.2),
+
+  // Countryside Barns, Silos, Windmill, Village Cottages & General Store
+  { minX: -511, maxX: -489, minZ: -84, maxZ: -61 }, // Oakridge Barn & Silos
+  { minX: -440.5, maxX: -418, minZ: 123, maxZ: 145 }, // Sunfield Barn & Silos
+  centeredBox(-496, -104, 3.2, 3.2), // Farm Windmill
+  centeredBox(-372, -72, 10.2, 10.2),
+  centeredBox(-414, -72, 10.2, 10.2),
+  centeredBox(-372, -24, 10.2, 10.2),
+  centeredBox(-416, -22, 10.2, 10.2),
+  centeredBox(-372, -214, 10.2, 10.2),
+  centeredBox(-416, -214, 10.2, 10.2),
+  centeredBox(-364, -34, 14, 11), // Greenvale Village Store
+];
+
+const CIRCLE_OBSTACLES: { x: number; z: number; r: number }[] = [
+  { x: ROUNDABOUT_CENTER.x, z: ROUNDABOUT_CENTER.z, r: ROUNDABOUT_INNER_R },
+  { x: ROUNDABOUT_2_CENTER.x, z: ROUNDABOUT_2_CENTER.z, r: ROUNDABOUT_INNER_R },
+  { x: -48, z: -96, r: 6.0 }, // Central Park Fountain Basin
+];
 
 export function isInCountrysideZone(x: number, z: number): boolean {
   // Open countryside lies west of urban edge (-202), south of Southern Blvd (60), or north of North Express (-252)
   return x < -202 || z > 60 || z < -252;
 }
 
+export function isWaterBlocked(x: number, z: number): boolean {
+  const onEastRiverCrossing =
+    Math.abs(z - -48) < 9.0 ||
+    Math.abs(z - -144) < 9.0 ||
+    Math.abs(z - -240) < 9.0 ||
+    Math.abs(z - 48) < 7.4;
+
+  if (!onEastRiverCrossing && x > 125.5 && x < 162.5) {
+    return true;
+  }
+
+  const onCreekBridgeCorridor =
+    Math.abs(z - -48) < 8.5 ||
+    Math.abs(z - -240) < 8.5 ||
+    Math.abs(z - 168) < 8.5;
+
+  if (!onCreekBridgeCorridor && x > CREEK_CENTER_X - 14.5 && x < CREEK_CENTER_X + 14.5) {
+    return true;
+  }
+
+  return false;
+}
+
+export function isObstacleOrWaterBlocked(x: number, z: number, margin = 1.25): boolean {
+  if (x < -680 || x > 320 || z < -420 || z > 310) return true;
+  if (isWaterBlocked(x, z)) return true;
+
+  for (let i = 0; i < BUILDING_OBSTACLES.length; i++) {
+    const b = BUILDING_OBSTACLES[i];
+    if (
+      x > b.minX - margin &&
+      x < b.maxX + margin &&
+      z > b.minZ - margin &&
+      z < b.maxZ + margin
+    ) {
+      return true;
+    }
+  }
+
+  for (let i = 0; i < CIRCLE_OBSTACLES.length; i++) {
+    const c = CIRCLE_OBSTACLES[i];
+    if (Math.hypot(x - c.x, z - c.z) < c.r + margin) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function resolveSolidObstacles(x: number, z: number, margin = 1.0): { x: number; z: number } {
   let rx = x;
   let rz = z;
 
-  for (let i = 0; i < CITY_BLOCKS.length; i++) {
-    const b = CITY_BLOCKS[i];
+  for (let i = 0; i < BUILDING_OBSTACLES.length; i++) {
+    const b = BUILDING_OBSTACLES[i];
     const minX = b.minX - margin;
     const maxX = b.maxX + margin;
     const minZ = b.minZ - margin;
@@ -371,6 +538,19 @@ export function resolveSolidObstacles(x: number, z: number, margin = 1.0): { x: 
     }
   }
 
+  for (let i = 0; i < CIRCLE_OBSTACLES.length; i++) {
+    const c = CIRCLE_OBSTACLES[i];
+    const minR = c.r + margin;
+    const dx = rx - c.x;
+    const dz = rz - c.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < minR) {
+      const safeDist = Math.max(dist, 0.001);
+      rx = c.x + (dx / safeDist) * minR;
+      rz = c.z + (dz / safeDist) * minR;
+    }
+  }
+
   return { x: rx, z: rz };
 }
 
@@ -378,92 +558,49 @@ export function resolveRoadPosition(
   x: number,
   z: number,
   speed: number
-): { x: number; z: number; speed: number } {
-  const solid = resolveSolidObstacles(x, z, 1.4);
-  const px = solid.x;
-  const pz = solid.z;
+): { x: number; z: number; speed: number; blocked: boolean } {
+  // 1) Clamp to outer world bounds
+  let cx = THREE.MathUtils.clamp(x, -680, 320);
+  let cz = THREE.MathUtils.clamp(z, -420, 310);
+  let blocked = cx !== x || cz !== z;
 
-  // 1) Free open-world Countryside & Agricultural Field Exploration (no artificial wall!)
-  if (isInCountrysideZone(px, pz)) {
-    let cx = THREE.MathUtils.clamp(px, -680, 320);
-    let cz = THREE.MathUtils.clamp(pz, -420, 310);
-
-    // Keep out of Countryside Creek water unless crossing on one of the 3 Creek Bridges
-    const onCreekBridgeCorridor =
-      Math.abs(cz - -48) < 9.5 ||
-      Math.abs(cz - -240) < 9.5 ||
-      Math.abs(cz - 168) < 9.5;
-    if (!onCreekBridgeCorridor && cx > CREEK_CENTER_X - 14.5 && cx < CREEK_CENTER_X + 14.5) {
-      cx = cx < CREEK_CENTER_X ? CREEK_CENTER_X - 14.5 : CREEK_CENTER_X + 14.5;
-    }
-
-    // Also keep out of East River if driving south/north of city
-    const onEastRiverBridge = Math.abs(cz - 48) < 9 || Math.abs(cz - -240) < 9.5;
-    if (!onEastRiverBridge && cx > 125.5 && cx < 162.5) {
-      cx = cx < RIVER_CENTER_X ? 125.5 : 162.5;
-    }
-
-    return { x: cx, z: cz, speed: (px !== x || pz !== z) ? speed * 0.5 : speed };
+  // 2) Push out of solid buildings & circular monuments
+  const solid = resolveSolidObstacles(cx, cz, 1.4);
+  if (solid.x !== cx || solid.z !== cz) {
+    blocked = true;
+    cx = solid.x;
+    cz = solid.z;
   }
 
-  // 2) Check both city roundabouts
-  for (let rIdx = 0; rIdx < ROUNDABOUTS.length; rIdx++) {
-    const rb = ROUNDABOUTS[rIdx];
-    const rdx = px - rb.x;
-    const rdz = pz - rb.z;
-    const rDist = Math.hypot(rdx, rdz);
-    if (rDist <= RB_DRIVABLE_OUTER) {
-      if (rDist >= RB_DRIVABLE_INNER) {
-        return { x: px, z: pz, speed: (px !== x || pz !== z) ? speed * 0.5 : speed };
-      }
-      const safeDist = Math.max(rDist, 0.001);
-      return {
-        x: rb.x + (rdx / safeDist) * RB_DRIVABLE_INNER,
-        z: rb.z + (rdz / safeDist) * RB_DRIVABLE_INNER,
-        speed: speed * 0.85,
-      };
-    }
+  // 3) Keep out of East River water unless crossing on a bridge or Harbor Tunnel
+  const onEastRiverCrossing =
+    Math.abs(cz - -48) < 9.0 ||
+    Math.abs(cz - -144) < 9.0 ||
+    Math.abs(cz - -240) < 9.0 ||
+    Math.abs(cz - 48) < 7.4;
+
+  if (!onEastRiverCrossing && cx > 125.5 && cx < 162.5) {
+    cx = cx < RIVER_CENTER_X ? 125.5 : 162.5;
+    blocked = true;
   }
 
-  // 3) Urban paved roads & airport apron
-  let bestDistSq = Infinity;
-  let bestX = px;
-  let bestZ = pz;
+  // 4) Keep out of Countryside Creek water unless crossing on one of the 3 Creek Bridges
+  const onCreekBridgeCorridor =
+    Math.abs(cz - -48) < 8.5 ||
+    Math.abs(cz - -240) < 8.5 ||
+    Math.abs(cz - 168) < 8.5;
 
-  for (let i = 0; i < DRIVABLE_RECTS.length; i++) {
-    const r = DRIVABLE_RECTS[i];
-    if (px >= r.minX && px <= r.maxX && pz >= r.minZ && pz <= r.maxZ) {
-      return { x: px, z: pz, speed: (px !== x || pz !== z) ? speed * 0.5 : speed };
-    }
-    const cx = THREE.MathUtils.clamp(px, r.minX, r.maxX);
-    const cz = THREE.MathUtils.clamp(pz, r.minZ, r.maxZ);
-    const dSq = (px - cx) * (px - cx) + (pz - cz) * (pz - cz);
-    if (dSq < bestDistSq) {
-      bestDistSq = dSq;
-      bestX = cx;
-      bestZ = cz;
-    }
+  if (!onCreekBridgeCorridor && cx > CREEK_CENTER_X - 14.5 && cx < CREEK_CENTER_X + 14.5) {
+    cx = cx < CREEK_CENTER_X ? CREEK_CENTER_X - 14.5 : CREEK_CENTER_X + 14.5;
+    blocked = true;
   }
 
-  for (let rIdx = 0; rIdx < ROUNDABOUTS.length; rIdx++) {
-    const rb = ROUNDABOUTS[rIdx];
-    const rdx = px - rb.x;
-    const rdz = pz - rb.z;
-    const rDist = Math.hypot(rdx, rdz);
-    if (rDist > RB_DRIVABLE_OUTER) {
-      const cx = rb.x + (rdx / rDist) * RB_DRIVABLE_OUTER;
-      const cz = rb.z + (rdz / rDist) * RB_DRIVABLE_OUTER;
-      const dSq = (px - cx) * (px - cx) + (pz - cz) * (pz - cz);
-      if (dSq < bestDistSq) {
-        bestDistSq = dSq;
-        bestX = cx;
-        bestZ = cz;
-      }
-    }
-  }
-
-  const blockedHit = px !== x || pz !== z;
-  return { x: bestX, z: bestZ, speed: blockedHit ? speed * 0.4 : speed * 0.94 };
+  return {
+    x: cx,
+    z: cz,
+    speed: blocked ? speed * 0.5 : speed,
+    blocked,
+  };
 }
 
 export function resolveWalkPosition(x: number, z: number): { x: number; z: number } {
@@ -479,7 +616,7 @@ export function resolveWalkPosition(x: number, z: number): { x: number; z: numbe
     Math.abs(wz - -48) < 11.5 ||
     Math.abs(wz - -144) < 11.5 ||
     Math.abs(wz - -240) < 11.5 ||
-    Math.abs(wz - 48) < 10.0;
+    Math.abs(wz - 48) < 7.4;
 
   if (!onRiverCrossing && wx > 125.5 && wx < 162.5) {
     wx = wx < RIVER_CENTER_X ? 125.5 : 162.5;

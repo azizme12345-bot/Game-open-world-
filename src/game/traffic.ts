@@ -76,6 +76,7 @@ export interface TrafficSystemHandle {
     dt: number,
     steerAngle?: number
   ) => void;
+  setVehicleVisible: (id: string, visible: boolean) => void;
   getVehicleTypesSummary: () => VehicleKind[];
   dispose: () => void;
 }
@@ -676,6 +677,7 @@ export function createTrafficSystem(): TrafficSystemHandle {
       a.x = x;
       a.z = z;
       a.yaw = yaw;
+      a.mesh.visible = true;
       if (a.riderGroup) a.riderGroup.visible = false;
       const gy = groundHeightAt(x, z);
       const pitch = groundPitchAt(x, z, yaw);
@@ -714,6 +716,12 @@ export function createTrafficSystem(): TrafficSystemHandle {
       for (let w = 0; w < a.wheelSpinGroups.length; w++) {
         const rad = a.wheelRadii[w] || 0.34;
         a.wheelSpinGroups[w].rotation.x += -(speed * dt) / rad;
+      }
+    },
+    setVehicleVisible: (id: string, visible: boolean) => {
+      const a = agents.find((ag) => ag.id === id);
+      if (a) {
+        a.mesh.visible = visible;
       }
     },
     getVehicleTypesSummary: () => {

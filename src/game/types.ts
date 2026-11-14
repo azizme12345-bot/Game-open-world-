@@ -1,8 +1,8 @@
 import type { RoutePoint } from './navigation';
 import type { LandmarkLocation } from './roadNetwork';
 
-export type CameraPreset = 'chase' | 'low' | 'side' | 'wide';
-export type GearMode = 'P' | 'R' | 'N' | 'D';
+export type CameraPreset = 'chase' | 'low' | 'side' | 'wide' | 'driver';
+export type GearMode = 'P' | 'R' | 'N' | 'D' | '1' | '2' | '3' | '4' | '5' | '6';
 export type WeatherMode = 'clear' | 'rain';
 export type TimeMode = 'auto' | 'day' | 'sunset' | 'night';
 
@@ -59,6 +59,10 @@ export interface HudTelemetry {
   activeVehicleLabel: string;
   speedKmh: number;
   gear: GearMode;
+  isManualGear: boolean;
+  rpm: number;
+  maxForwardGear: number;
+  steerAngle: number;
   carHealth: number;
   repairing: boolean;
   repairProgress: number;
